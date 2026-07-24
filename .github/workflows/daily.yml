@@ -1,0 +1,40 @@
+name: Short quotidien
+
+on:
+  schedule:
+    - cron: "0 9 * * *"   # tous les jours a 9h UTC (11h en France l'ete)
+  workflow_dispatch: {}    # bouton "Run workflow" pour tester a la main
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Dependances
+        run: pip install -r requirements.txt
+
+      - name: Generer la video
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: python generate.py
+
+      - name: Uploader sur YouTube
+        env:
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_TOKEN: ${{ secrets.YT_TOKEN }}
+        run: python upload.py
+
+      - name: Archiver la video (debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: short
+          path: output/
