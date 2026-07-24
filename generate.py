@@ -113,10 +113,16 @@ def make_script(topic: str) -> dict:
     client = genai.Client(api_key=key)
     prompt = (
         f"Ecris un script court pour un YouTube Short en francais sur : {topic}.\n"
-        "Format : un hook accrocheur + 3 faits surprenants et verifiables, "
-        "chacun en 1 phrase courte et punchy (style oral, pas de jargon).\n"
+        "REGLE N.1 - le HOOK (2 premieres secondes) doit STOPPER le scroll :\n"
+        "  - 6 a 10 mots MAX, style parle, direct, tutoiement.\n"
+        "  - cree un 'curiosity gap' : promesse choc, question intrigante, "
+        "chiffre fou ou affirmation contre-intuitive.\n"
+        "  - PAS de 'Savais-tu que', PAS de 'Bienvenue', PAS de banalite. "
+        "Exemples de tons : 'Ton corps fait un truc flippant chaque nuit.', "
+        "'99% des gens ignorent ca sur X.', 'Ce detail change tout.'\n"
+        "Ensuite : 3 faits surprenants et verifiables, 1 phrase courte et punchy chacun.\n"
         "Reponds UNIQUEMENT en JSON strict avec les cles : "
-        'title (string), hook (string), facts (liste de 3 strings), '
+        'title (string, accrocheur), hook (string), facts (liste de 3 strings), '
         "keywords (liste de 3 mots-cles anglais pour chercher des videos stock).\n"
         "Pas de texte hors du JSON."
     )

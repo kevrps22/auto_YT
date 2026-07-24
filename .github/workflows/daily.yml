@@ -2,7 +2,8 @@ name: Short quotidien
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # tous les jours a 9h UTC (11h en France l'ete)
+    - cron: "0 9 * * *"    # 11h en France (ete) / 10h (hiver)
+    - cron: "0 16 * * *"   # 18h en France (ete) / 17h (hiver)
   workflow_dispatch: {}    # bouton "Run workflow" pour tester a la main
 
 jobs:
