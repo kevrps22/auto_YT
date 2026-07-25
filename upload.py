@@ -23,7 +23,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# force-ssl couvre l'upload ET la lecture/reponse aux commentaires
+SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 TOKEN = Path("token.json")
 CLIENT = Path("client_secret.json")
 
