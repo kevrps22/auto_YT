@@ -53,13 +53,20 @@ _load_env()
 # Voix "Multilingual" = les plus naturelles d'edge-tts (intonation + emotion).
 # Alternatives : fr-FR-VivienneMultilingualNeural (feminine), fr-FR-HenriNeural (classique).
 VOICE = "fr-FR-RemyMultilingualNeural"
-RATE = "+8%"                         # un peu plus rapide = plus dynamique, moins robotique
-PITCH = "+2Hz"                       # legere remontee, ton plus vivant
+# Ton (rate, pitch, volume) par segment du script -> voix vivante, pas monotone.
+TONES = {
+    "hook":       ("+14%", "+13Hz", "+22%"),   # fort, excite, rapide = accroche
+    "tension":    ("+3%",  "+6Hz",  "+8%"),    # intrigant, on ralentit un peu
+    "body":       ("+4%",  "-1Hz",  "+0%"),    # explication posee, ton "je revele un secret"
+    "revelation": ("-3%",  "+4Hz",  "+12%"),   # emphase, on ralentit pour l'impact
+    "loop":       ("+6%",  "+2Hz",  "+5%"),    # relance vers le debut
+}
+PAUSE_BEFORE_REVELATION = 0.28       # micro-pause dramatique avant la revelation
 W, H = 1080, 1920                    # format vertical Short
 FONT = "Anton"                       # police des sous-titres (fichier dans fonts/)
 
-LEAD = 1.3                           # silence d'intro avant la voix (titre anime)
-TAIL = 2.4                           # duree de l'outro apres la voix (pas de coupure seche)
+LEAD = 0.3                           # quasi pas d'intro : le hook demarre tout de suite
+TAIL = 2.0                           # petite outro pour ne pas couper net
 MUSIC_DIR = Path("music")            # depose des .mp3 ici (musique de fond, choix aleatoire)
 MUSIC_VOL = 0.22                     # volume de la musique (0-1) ; ducking sous la voix
 OUTRO_TEXT = "ABONNE-TOI POUR LA SUITE"
@@ -99,30 +106,36 @@ def make_script(topic: str) -> dict:
     if not key:
         print("[script] pas de GEMINI_API_KEY -> script d'exemple")
         return {
-            "title": f"3 faits fous sur {topic}",
-            "hook": f"Tu ne sais surement pas ca sur {topic}.",
-            "facts": [
-                f"Premier fait surprenant sur {topic}.",
-                f"Deuxieme fait encore plus etonnant sur {topic}.",
-                f"Et le dernier va te bluffer completement.",
-            ],
+            "title": f"La verite sur {topic}",
+            "hook": f"Ce que tu crois sur {topic} est FAUX.",
+            "tension": "Et la realite est bien plus flippante.",
+            "body": f"En vrai, {topic}, c'est un phenomene que presque personne "
+                    "ne comprend vraiment. Les chiffres derriere sont hallucinants.",
+            "revelation": "Et le plus fou, c'est que ca se passe juste sous tes yeux.",
+            "loop": "La prochaine fois, tu y repenseras forcement.",
             "keywords": [topic, "science", "nature"],
         }
 
     from google import genai
     client = genai.Client(api_key=key)
     prompt = (
-        f"Ecris un script court pour un YouTube Short en francais sur : {topic}.\n"
-        "REGLE N.1 - le HOOK (2 premieres secondes) doit STOPPER le scroll :\n"
-        "  - 6 a 10 mots MAX, style parle, direct, tutoiement.\n"
-        "  - cree un 'curiosity gap' : promesse choc, question intrigante, "
-        "chiffre fou ou affirmation contre-intuitive.\n"
-        "  - PAS de 'Savais-tu que', PAS de 'Bienvenue', PAS de banalite. "
-        "Exemples de tons : 'Ton corps fait un truc flippant chaque nuit.', "
-        "'99% des gens ignorent ca sur X.', 'Ce detail change tout.'\n"
-        "Ensuite : 3 faits surprenants et verifiables, 1 phrase courte et punchy chacun.\n"
+        f"Ecris un script pour un YouTube Short en francais sur : {topic}.\n"
+        "Structure NARRATIVE obligatoire (storytelling, PAS une liste de faits) :\n"
+        "1) HOOK (0-3s) : une phrase choc qui INVERSE une croyance ou pose une question "
+        "extreme. Cree un vide d'information. Ton exclamatif. Ex: "
+        "'La lave n'est MEME PAS ce qui te tue en premier dans un volcan.'\n"
+        "2) TENSION (3-8s) : 1 phrase qui accentue le mystere et retarde la reponse. Ex: "
+        "'En realite, la plupart des victimes ne touchent jamais la lave.'\n"
+        "3) BODY (8-35s) : 2 a 4 phrases qui expliquent le phenomene, avec des mots "
+        "sensoriels et forts (fondre, pulveriser, explosion). Chaque phrase apporte une "
+        "info nouvelle et marquante.\n"
+        "4) REVELATION (35-45s) : 1 phrase avec le fait le plus fascinant/choquant.\n"
+        "5) LOOP (45-50s) : 1 phrase de conclusion qui s'enchaine logiquement avec le HOOK "
+        "(pour donner envie de revoir la video).\n"
+        "REGLES : phrases COURTES, une idee par phrase. Tutoiement. AUCUN 'salut', "
+        "'aujourd'hui', 'bienvenue'. Rentre direct dans le sujet. Style parle et rythme.\n"
         "Reponds UNIQUEMENT en JSON strict avec les cles : "
-        'title (string, accrocheur), hook (string), facts (liste de 3 strings), '
+        "title (string accrocheur), hook, tension, body, revelation, loop (strings), "
         "keywords (liste de 3 mots-cles anglais pour chercher des videos stock).\n"
         "Pas de texte hors du JSON."
     )
@@ -134,21 +147,57 @@ def make_script(topic: str) -> dict:
 
 
 # ---------------------------------------------------------------- 2. voix
-async def _tts(text: str, audio_path: Path):
-    """edge-tts : ecrit l'audio."""
+async def _tts(text, audio_path, rate, pitch, volume):
+    """edge-tts : ecrit l'audio avec un ton donne (rate/pitch/volume)."""
     import edge_tts
-    comm = edge_tts.Communicate(text, VOICE, rate=RATE, pitch=PITCH)
+    comm = edge_tts.Communicate(text, VOICE, rate=rate, pitch=pitch, volume=volume)
     with open(audio_path, "wb") as f:
         async for chunk in comm.stream():
             if chunk["type"] == "audio":
                 f.write(chunk["data"])
 
 
-def make_voice(narration: str) -> Path:
+def _silence(dur: float) -> Path:
+    p = WORK / f"sil_{dur}.mp3"
+    subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-t", f"{dur}",
+                    "-i", "anullsrc=r=24000:cl=mono", str(p)],
+                   check=True, capture_output=True)
+    return p
+
+
+def make_voice(segments: list[dict]):
+    """Genere la voix segment par segment (chacun son ton), avec micro-pause
+    avant la revelation. Renvoie (audio_path, timeline).
+
+    timeline = liste ordonnee d'items :
+      {"kind":"speech","text","tone","dur"} ou {"kind":"pause","dur"}
+    """
+    files, timeline = [], []
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        tone = seg.get("tone", "body")
+        if tone == "revelation":                      # beat dramatique avant la revelation
+            files.append(_silence(PAUSE_BEFORE_REVELATION))
+            timeline.append({"kind": "pause", "dur": PAUSE_BEFORE_REVELATION})
+        f = WORK / f"seg_{len(files)}.mp3"
+        rate, pitch, vol = TONES.get(tone, TONES["body"])
+        asyncio.run(_tts(text, f, rate, pitch, vol))
+        files.append(f)
+        timeline.append({"kind": "speech", "text": text, "tone": tone, "dur": _duration(f)})
+
+    # concatenation robuste (filtre concat, re-encode) : gere les params differents
+    inputs = []
+    for f in files:
+        inputs += ["-i", str(f)]
+    filt = "".join(f"[{i}:a]" for i in range(len(files))) + f"concat=n={len(files)}:v=0:a=1[a]"
     audio = WORK / "voice.mp3"
-    asyncio.run(_tts(narration, audio))
-    print(f"[voix] audio -> {audio.name}")
-    return audio
+    subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex", filt, "-map", "[a]", str(audio)],
+                   check=True, capture_output=True)
+    total = sum(it["dur"] for it in timeline)
+    print(f"[voix] {len([t for t in timeline if t['kind']=='speech'])} segments, {total:.1f}s")
+    return audio, timeline
 
 
 # ---------------------------------------------------------------- 3. sous-titres
@@ -157,19 +206,31 @@ def _fmt_ass_time(t: float) -> str:
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
-def build_subtitles(narration, voice_dur, total, title, ass_path, offset=0.0, group=3):
-    """Genere l'ASS complet : intro animee + sous-titres karaoke + outro.
+def _karaoke_lines(text, seg_start, seg_dur, style, group=3, pop_from=90):
+    """Construit les Dialogue karaoke pour un segment (hook ou corps)."""
+    words = text.replace(",", "").replace(".", "").split()
+    if not words:
+        return []
+    groups = [words[i:i + group] for i in range(0, len(words), group)]
+    char_total = sum(len(w) + 1 for w in words) or 1
+    span = seg_dur / char_total
+    out, t = [], seg_start
+    for g in groups:
+        dur = sum(len(w) + 1 for w in g) * span
+        start, end = t, t + dur
+        t = end
+        parts = [rf"{{\kf{max(1, round((len(w) + 1) * span * 100))}}}{w.upper()}" for w in g]
+        txt = (rf"{{\fscx{pop_from}\fscy{pop_from}\t(0,110,\fscx100\fscy100)}}"
+               + " ".join(parts))
+        out.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},{style},{txt}")
+    return out
 
-    - Les sous-titres de la voix sont decales de `offset` (silence d'intro).
-    - edge-tts 7.x ne donne pas de timing mot-a-mot fiable -> on l'estime au
-      prorata du nombre de caracteres.
+
+def build_subtitles(timeline, total, ass_path, offset=0.0):
+    """ASS karaoke pilote par la timeline de la voix (sync parfaite avec l'audio).
+
+    Hook en gros/centre, reste en bas. Les pauses avancent le temps sans texte.
     """
-    all_words = narration.replace(",", "").replace(".", "").split()
-    groups = [all_words[i:i + group] for i in range(0, len(all_words), group)]
-    char_total = sum(len(w) + 1 for w in all_words) or 1
-    span = voice_dur / char_total                    # secondes par caractere
-
-    # Couleurs ASS = &HAABBGGRR.
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -180,38 +241,31 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Def,{FONT},118,&H0000E5FF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,7,4,2,90,90,640,1
-Style: Intro,{FONT},104,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,2,0,1,8,5,5,140,140,0,1
+Style: Hook,{FONT},142,&H0000E5FF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,9,5,5,80,80,0,1
 Style: Outro,{FONT},104,&H0000E5FF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,2,0,1,8,5,5,140,140,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Text
 """
-    lines = []
+    lines, t = [], offset
+    for it in timeline:
+        if it["kind"] == "pause":
+            t += it["dur"]
+            continue
+        # le hook s'affiche en gros et centre ; le reste en bas
+        style = "Hook" if it["tone"] == "hook" else "Def"
+        pop = 75 if style == "Hook" else 90
+        lines += _karaoke_lines(it["text"], t, it["dur"], style, group=3, pop_from=pop)
+        t += it["dur"]
 
-    # --- Intro animee : le titre apparait (fondu + zoom + leger balancement)
-    intro_txt = (r"{\fad(250,300)\an5\fscx60\fscy60\frz-6"
-                 r"\t(0,350,\fscx104\fscy104\frz2)\t(350,550,\fscx100\fscy100\frz0)}"
-                 + title.upper())
-    lines.append(f"Dialogue: 1,{_fmt_ass_time(0.15)},{_fmt_ass_time(offset + 0.55)},Intro,{intro_txt}")
-
-    # --- Sous-titres karaoke (decales de offset)
-    t = offset
-    for g in groups:
-        dur = sum(len(w) + 1 for w in g) * span
-        start, end = t, t + dur
-        t = end
-        parts = [rf"{{\kf{max(1, round((len(w) + 1) * span * 100))}}}{w.upper()}" for w in g]
-        txt = r"{\fscx90\fscy90\t(0,120,\fscx100\fscy100)}" + " ".join(parts)
-        lines.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Def,{txt}")
-
-    # --- Outro : carte de fin (fondu + zoom) pendant le TAIL
-    outro_start = offset + voice_dur + 0.15
+    # Outro
+    outro_start = t + 0.15
     outro_txt = (r"{\fad(350,400)\an5\fscx70\fscy70"
                  r"\t(0,400,\fscx100\fscy100)}" + OUTRO_TEXT)
     lines.append(f"Dialogue: 1,{_fmt_ass_time(outro_start)},{_fmt_ass_time(total - 0.1)},Outro,{outro_txt}")
 
     ass_path.write_text(header + "\n".join(lines), encoding="utf-8")
-    print(f"[subs] {len(groups)} lignes karaoke + intro + outro -> {ass_path.name}")
+    print(f"[subs] {sum(1 for i in timeline if i['kind']=='speech')} segments karaoke + outro -> {ass_path.name}")
 
 
 # ---------------------------------------------------------------- 4. visuels
@@ -288,14 +342,16 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
     else:
         vid_in = ["-f", "lavfi", "-t", f"{total:.2f}", "-i", f"color=c=black:s={W}x{H}:r=30"]
 
-    # --- Chaine video : sous-titres + fondu ouverture/fermeture
+    # --- Chaine video : sous-titres + fondu (ouverture tres courte pour ne pas perdre le viewer)
     vchain = (f"[0:v]subtitles='{ass_esc}':fontsdir=fonts,"
-              f"fade=t=in:st=0:d=0.5,fade=t=out:st={total - 0.7:.2f}:d=0.7[v]")
+              f"fade=t=in:st=0:d=0.2,fade=t=out:st={total - 0.6:.2f}:d=0.6[v]")
 
-    # --- Chaine audio : voix decalee (intro) + musique optionnelle avec ducking
+    # --- Chaine audio : voix decalee + compressee/boostee (elle claque) + musique
     inputs = ["-i", str(audio)]                       # input 1 = voix
     voc = (f"[1:a]aformat=sample_rates=44100:channel_layouts=stereo,"
-           f"adelay={lead_ms}|{lead_ms},apad,atrim=0:{total:.2f}")
+           f"adelay={lead_ms}|{lead_ms},apad,atrim=0:{total:.2f},"
+           f"acompressor=threshold=0.08:ratio=4:attack=5:release=180,"
+           f"volume=1.6,alimiter=limit=0.95")
     if music:
         inputs += ["-stream_loop", "-1", "-i", str(music)]   # input 2 = musique (bouclee)
         achain = (
@@ -306,11 +362,13 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
             f"afade=t=in:st=0:d=1.2,afade=t=out:st={total - 1.6:.2f}:d=1.6[mus0];"
             # ducking : la musique baisse quand la voix parle
             f"[mus0][vocsc]sidechaincompress=threshold=0.03:ratio=8:attack=5:release=280[mus];"
-            f"[voc][mus]amix=inputs=2:duration=first:normalize=0[aout]"
+            f"[voc][mus]amix=inputs=2:duration=first:normalize=0[mix];"
+            # loudness au niveau des plateformes (~-14 LUFS) = ca sonne fort et pro
+            f"[mix]loudnorm=I=-14:TP=-1.5:LRA=11[aout]"
         )
         print(f"[musique] {music.name}")
     else:
-        achain = voc + "[aout]"
+        achain = voc + ",loudnorm=I=-14:TP=-1.5:LRA=11[aout]"
         print("[musique] aucune (depose un .mp3 dans music/)")
 
     OUT_DIR.mkdir(exist_ok=True)
@@ -328,13 +386,16 @@ def main():
     topic = sys.argv[1] if len(sys.argv) > 1 else random.choice(DEFAULT_TOPICS)
     print(f"=== Sujet : {topic} ===")
     script = make_script(topic)
-    narration = script["hook"] + " " + " ".join(script["facts"])
+    # ordre narratif : hook -> tension -> body -> revelation -> loop
+    segments = [{"text": script.get(k, ""), "tone": k}
+                for k in ("hook", "tension", "body", "revelation", "loop")]
+    narration = " ".join(s["text"] for s in segments if s["text"])
 
-    audio = make_voice(narration)
-    voice_dur = _duration(audio)
-    total = LEAD + voice_dur + TAIL          # intro + voix + outro
+    audio, timeline = make_voice(segments)
+    voice_dur = sum(it["dur"] for it in timeline)
+    total = LEAD + voice_dur + TAIL          # ~0.3s + voix + outro
     ass = WORK / "subs.ass"
-    build_subtitles(narration, voice_dur, total, script["title"], ass, offset=LEAD)
+    build_subtitles(timeline, total, ass, offset=LEAD)
     clips = fetch_clips(script.get("keywords", [topic]))
 
     out = OUT_DIR / "short.mp4"
