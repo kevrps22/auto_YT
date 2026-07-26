@@ -52,14 +52,24 @@ _load_env()
 # ---------------------------------------------------------------- config
 # Voix "Multilingual" = les plus naturelles d'edge-tts (intonation + emotion).
 # Alternatives : fr-FR-VivienneMultilingualNeural (feminine), fr-FR-HenriNeural (classique).
-VOICE = "fr-FR-RemyMultilingualNeural"
-# Ton (rate, pitch, volume) par segment du script -> voix vivante, pas monotone.
+# --- Voix : Google Cloud TTS (Chirp 3 HD, tres naturel) si cle presente, sinon edge-tts.
+VOICE = "fr-FR-RemyMultilingualNeural"         # voix edge-tts (fallback gratuit)
+GOOGLE_VOICE = "fr-FR-Chirp3-HD-Charon"        # voix Google Chirp 3 HD (masculine, naturelle)
+# Ton edge-tts (rate, pitch, volume) par segment.
 TONES = {
-    "hook":       ("+14%", "+13Hz", "+22%"),   # fort, excite, rapide = accroche
-    "tension":    ("+3%",  "+6Hz",  "+8%"),    # intrigant, on ralentit un peu
-    "body":       ("+4%",  "-1Hz",  "+0%"),    # explication posee, ton "je revele un secret"
-    "revelation": ("-3%",  "+4Hz",  "+12%"),   # emphase, on ralentit pour l'impact
-    "loop":       ("+6%",  "+2Hz",  "+5%"),    # relance vers le debut
+    "hook":       ("+14%", "+13Hz", "+22%"),
+    "tension":    ("+3%",  "+6Hz",  "+8%"),
+    "body":       ("+4%",  "-1Hz",  "+0%"),
+    "revelation": ("-3%",  "+4Hz",  "+12%"),
+    "loop":       ("+6%",  "+2Hz",  "+5%"),
+}
+# Ton Google (speakingRate, volumeGainDb) par segment (Chirp 3 HD ne gere pas le pitch).
+GTONES = {
+    "hook":       (1.15, 4.0),
+    "tension":    (1.03, 1.0),
+    "body":       (1.00, 0.0),
+    "revelation": (0.95, 2.0),
+    "loop":       (1.06, 1.0),
 }
 PAUSE_BEFORE_REVELATION = 0.28       # micro-pause dramatique avant la revelation
 W, H = 1080, 1920                    # format vertical Short
@@ -147,7 +157,7 @@ def make_script(topic: str) -> dict:
 
 
 # ---------------------------------------------------------------- 2. voix
-async def _tts(text, audio_path, rate, pitch, volume):
+async def _edge_tts(text, audio_path, rate, pitch, volume):
     """edge-tts : ecrit l'audio avec un ton donne (rate/pitch/volume)."""
     import edge_tts
     comm = edge_tts.Communicate(text, VOICE, rate=rate, pitch=pitch, volume=volume)
@@ -155,6 +165,33 @@ async def _tts(text, audio_path, rate, pitch, volume):
         async for chunk in comm.stream():
             if chunk["type"] == "audio":
                 f.write(chunk["data"])
+
+
+def _google_tts(text, audio_path, tone):
+    """Google Cloud TTS (Chirp 3 HD) via REST + cle API. Voix tres naturelle."""
+    import base64
+    rate, gain = GTONES.get(tone, GTONES["body"])
+    r = requests.post(
+        "https://texttospeech.googleapis.com/v1/text:synthesize",
+        params={"key": os.environ["GOOGLE_TTS_API_KEY"]},
+        json={
+            "input": {"text": text},
+            "voice": {"languageCode": "fr-FR", "name": GOOGLE_VOICE},
+            "audioConfig": {"audioEncoding": "MP3", "speakingRate": rate, "volumeGainDb": gain},
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    audio_path.write_bytes(base64.b64decode(r.json()["audioContent"]))
+
+
+def _synth(text, audio_path, tone):
+    """Choisit le moteur : Google Chirp 3 HD si cle presente, sinon edge-tts."""
+    if os.getenv("GOOGLE_TTS_API_KEY"):
+        _google_tts(text, audio_path, tone)
+    else:
+        rate, pitch, vol = TONES.get(tone, TONES["body"])
+        asyncio.run(_edge_tts(text, audio_path, rate, pitch, vol))
 
 
 def _silence(dur: float) -> Path:
@@ -182,8 +219,7 @@ def make_voice(segments: list[dict]):
             files.append(_silence(PAUSE_BEFORE_REVELATION))
             timeline.append({"kind": "pause", "dur": PAUSE_BEFORE_REVELATION})
         f = WORK / f"seg_{len(files)}.mp3"
-        rate, pitch, vol = TONES.get(tone, TONES["body"])
-        asyncio.run(_tts(text, f, rate, pitch, vol))
+        _synth(text, f, tone)
         files.append(f)
         timeline.append({"kind": "speech", "text": text, "tone": tone, "dur": _duration(f)})
 
@@ -206,8 +242,9 @@ def _fmt_ass_time(t: float) -> str:
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
-def _karaoke_lines(text, seg_start, seg_dur, style, group=3, pop_from=90):
-    """Construit les Dialogue karaoke pour un segment (hook ou corps)."""
+def _karaoke_lines(text, seg_start, seg_dur, style, group=3, pop_from=64):
+    """Sous-titres karaoke dynamiques : rebond (overshoot) a l'apparition +
+    remplissage couleur mot par mot (effet CapCut)."""
     words = text.replace(",", "").replace(".", "").split()
     if not words:
         return []
@@ -220,8 +257,10 @@ def _karaoke_lines(text, seg_start, seg_dur, style, group=3, pop_from=90):
         start, end = t, t + dur
         t = end
         parts = [rf"{{\kf{max(1, round((len(w) + 1) * span * 100))}}}{w.upper()}" for w in g]
-        txt = (rf"{{\fscx{pop_from}\fscy{pop_from}\t(0,110,\fscx100\fscy100)}}"
-               + " ".join(parts))
+        # apparition : fondu rapide + rebond avec depassement (pop -> 112% -> 100%)
+        anim = (rf"{{\fad(45,0)\fscx{pop_from}\fscy{pop_from}"
+                r"\t(0,95,\fscx112\fscy112)\t(95,180,\fscx100\fscy100)}")
+        txt = anim + " ".join(parts)
         out.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},{style},{txt}")
     return out
 
@@ -240,9 +279,9 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Def,{FONT},118,&H0000E5FF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,7,4,2,90,90,640,1
-Style: Hook,{FONT},142,&H0000E5FF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,9,5,5,80,80,0,1
-Style: Outro,{FONT},104,&H0000E5FF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,2,0,1,8,5,5,140,140,0,1
+Style: Def,{FONT},126,&H0000FFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,8,4,2,90,90,600,1
+Style: Hook,{FONT},152,&H0000FFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,10,5,5,90,90,0,1
+Style: Outro,{FONT},108,&H0000FFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,2,0,1,9,5,5,140,140,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Text
