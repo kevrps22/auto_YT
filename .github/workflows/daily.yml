@@ -2,8 +2,7 @@ name: Short quotidien
 
 on:
   schedule:
-    - cron: "8 9 * * *"    # ~11h en France (ete) - minute decalee pour eviter la file d'attente
-    - cron: "8 16 * * *"   # ~18h en France (ete)
+    - cron: "8 16 * * *"   # ~18h en France (ete) - 1 seule video/jour (chaine jeune)
   workflow_dispatch: {}    # bouton "Run workflow" pour tester a la main
 
 jobs:
