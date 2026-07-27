@@ -414,7 +414,7 @@ def fetch_clips(keywords: list[str], n: int = 4) -> list[Path]:
         r = requests.get(
             "https://api.pexels.com/videos/search",
             headers={"Authorization": key},
-            params={"query": kw, "orientation": "portrait", "per_page": 3, "size": "large"},
+            params={"query": kw, "orientation": "portrait", "per_page": 5, "size": "large"},
             timeout=30,
         )
         for vid in r.json().get("videos", []):
@@ -485,6 +485,9 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
                         "-pix_fmt", "yuv420p", "-r", "30", "-vsync", "cfr", str(bg)],
                        check=True, capture_output=True)
         vid_in = ["-i", str(bg)]
+        # frame PROPRE (sans sous-titres) pour la miniature
+        subprocess.run(["ffmpeg", "-y", "-ss", f"{total * 0.4:.2f}", "-i", str(bg),
+                        "-frames:v", "1", str(OUT_DIR / "_thumbframe.jpg")], capture_output=True)
     else:
         vid_in = ["-f", "lavfi", "-t", f"{total:.2f}", "-i", f"color=c=black:s={W}x{H}:r=30"]
 
@@ -546,7 +549,7 @@ def main():
         words = None
     ass = WORK / "subs.ass"
     build_subtitles(timeline, words, total, ass, emphasis=script.get("emphasis"), offset=LEAD)
-    clips = fetch_clips(script.get("keywords", [topic]), n=6)
+    clips = fetch_clips(script.get("keywords", [topic]), n=8)
 
     out = OUT_DIR / "short.mp4"
     assemble(audio, ass, clips, out, total)
@@ -562,17 +565,39 @@ def main():
     print("\nTermine. Verifie output/short.mp4")
 
 
+def make_thumbnail(title: str, out_jpg: Path):
+    """Miniature : frame PROPRE (output/_thumbframe.jpg, sans sous-titres) + titre centre."""
+    words = title.replace("#Shorts", "").replace("#shorts", "").strip().upper().split()
+    lines = [" ".join(words[i:i + 3]) for i in range(0, len(words), 3)][:4]  # ~3 mots/ligne, max 4
+    ttxt = OUT_DIR / "_tt.txt"
+    ttxt.write_text("\n".join(lines), encoding="utf-8", newline="\n")        # \n propre (pas \r\n)
+
+    frame = OUT_DIR / "_thumbframe.jpg"
+    if frame.exists():
+        src = ["-i", "output/_thumbframe.jpg"]
+    else:                                                                   # fallback : fond degrade sombre
+        src = ["-f", "lavfi", "-i", f"color=c=0x0A1428:s={W}x{H}"]
+    vf = ("eq=brightness=-0.08:contrast=1.05,"                              # assombrit -> texte lisible
+          "drawtext=fontfile=fonts/Anton-Regular.ttf:textfile=output/_tt.txt:"
+          "fontcolor=white:borderw=16:bordercolor=black:fontsize=132:"
+          "line_spacing=18:x=(w-text_w)/2:y=(h-text_h)/2")                  # bloc centre
+    subprocess.run(["ffmpeg", "-y", *src, "-frames:v", "1", "-vf", vf, str(out_jpg)],
+                   capture_output=True)
+    ttxt.unlink(missing_ok=True)
+
+
 def archive(video: Path, meta: dict):
-    """Copie la video + meta + vignette dans output/lib/<date>_<slug>/ (galerie)."""
+    """Copie la video + meta + vignette + miniature dans output/lib/<date>_<slug>/."""
     slug = re.sub(r"[^a-z0-9]+", "-", meta["topic"].lower()).strip("-")[:40] or "video"
     folder = OUT_DIR / "lib" / f"{datetime.now():%Y%m%d_%H%M%S}_{slug}"
     folder.mkdir(parents=True, exist_ok=True)
     shutil.copy2(video, folder / "short.mp4")
     (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    # vignette (1 image a ~1s)
+    # vignette (pour la galerie de l'app)
     subprocess.run(["ffmpeg", "-y", "-ss", "1", "-i", str(video), "-frames:v", "1",
-                    "-vf", "scale=360:-1", str(folder / "poster.jpg")],
-                   capture_output=True)
+                    "-vf", "scale=360:-1", str(folder / "poster.jpg")], capture_output=True)
+    # miniature YouTube (frame propre + titre)
+    make_thumbnail(meta.get("title", ""), folder / "thumbnail.jpg")
     print(f"[galerie] archive -> {folder}")
 
 
