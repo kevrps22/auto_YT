@@ -542,10 +542,13 @@ def main():
     out = OUT_DIR / "short.mp4"
     assemble(audio, ass, clips, out, total)
 
+    tt_title = script["title"].replace("#Shorts", "").strip()
     meta = {"title": script["title"] + " #Shorts",
             "description": narration + "\n\n#Shorts #shorts",
             "tags": (script.get("keywords", []) + ["shorts"]),
             "topic": topic,
+            "tiktok": f"{tt_title} 👀🤯\n\n#pourtoi #fyp #lesaviezvous #culturegenerale "
+                      "#incroyable #apprendresurtiktok #wtf",
             "created": datetime.now().isoformat(timespec="seconds")}
     (OUT_DIR / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
