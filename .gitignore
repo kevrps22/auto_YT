@@ -1,4 +1,6 @@
 output/
+dashboard.html
+history.json
 .env
 client_secret.json
 token.json

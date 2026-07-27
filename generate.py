@@ -21,9 +21,12 @@ import asyncio
 import json
 import os
 import random
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -53,15 +56,16 @@ _load_env()
 # Voix "Multilingual" = les plus naturelles d'edge-tts (intonation + emotion).
 # Alternatives : fr-FR-VivienneMultilingualNeural (feminine), fr-FR-HenriNeural (classique).
 # --- Voix : Google Cloud TTS (Chirp 3 HD, tres naturel) si cle presente, sinon edge-tts.
-VOICE = "fr-FR-RemyMultilingualNeural"         # voix edge-tts (fallback gratuit)
+VOICE = os.getenv("VOICE", "fr-CA-AntoineNeural")   # voix edge-tts (configurable via .env)
 GOOGLE_VOICE = "fr-FR-Chirp3-HD-Charon"        # voix Google Chirp 3 HD (masculine, naturelle)
 # Ton edge-tts (rate, pitch, volume) par segment.
+# Pitch volontairement FAIBLE : de gros decalages rendent la voix robotique.
 TONES = {
-    "hook":       ("+14%", "+13Hz", "+22%"),
-    "tension":    ("+3%",  "+6Hz",  "+8%"),
-    "body":       ("+4%",  "-1Hz",  "+0%"),
-    "revelation": ("-3%",  "+4Hz",  "+12%"),
-    "loop":       ("+6%",  "+2Hz",  "+5%"),
+    "hook":       ("+9%",  "+3Hz", "+0%"),   # energie via le rythme, pas le pitch
+    "tension":    ("+2%",  "+1Hz", "+0%"),
+    "body":       ("+2%",  "+0Hz", "+0%"),
+    "revelation": ("-4%",  "+1Hz", "+0%"),
+    "loop":       ("+4%",  "+0Hz", "+0%"),
 }
 # Ton Google (speakingRate, volumeGainDb) par segment (Chirp 3 HD ne gere pas le pitch).
 GTONES = {
@@ -71,6 +75,12 @@ GTONES = {
     "revelation": (0.95, 2.0),
     "loop":       (1.06, 1.0),
 }
+# Kokoro (open-source local). FR natif = ff_siwis (feminine). Voix masculine configurable
+# via .env KOKORO_VOICE (les voix masculines viennent d'autres langues -> accent possible).
+KOKORO_VOICE = os.getenv("KOKORO_VOICE", "ff_siwis")
+KOKORO_SPEED = {"hook": 1.12, "tension": 1.0, "body": 1.0, "revelation": 0.92, "loop": 1.05}
+# Moteur voix : "kokoro" | "google" | "edge" (via .env TTS_ENGINE ; defaut edge)
+TTS_ENGINE = os.getenv("TTS_ENGINE", "edge").lower()
 PAUSE_BEFORE_REVELATION = 0.28       # micro-pause dramatique avant la revelation
 W, H = 1080, 1920                    # format vertical Short
 FONT = "Anton"                       # police des sous-titres (fichier dans fonts/)
@@ -124,6 +134,7 @@ def make_script(topic: str) -> dict:
             "revelation": "Et le plus fou, c'est que ca se passe juste sous tes yeux.",
             "loop": "La prochaine fois, tu y repenseras forcement.",
             "keywords": [topic, "science", "nature"],
+            "emphasis": ["FAUX", "flippante", "hallucinants", "fou"],
         }
 
     from google import genai
@@ -146,7 +157,9 @@ def make_script(topic: str) -> dict:
         "'aujourd'hui', 'bienvenue'. Rentre direct dans le sujet. Style parle et rythme.\n"
         "Reponds UNIQUEMENT en JSON strict avec les cles : "
         "title (string accrocheur), hook, tension, body, revelation, loop (strings), "
-        "keywords (liste de 3 mots-cles anglais pour chercher des videos stock).\n"
+        "keywords (liste de 3 mots-cles anglais pour chercher des videos stock), "
+        "emphasis (liste des 6 a 10 mots LES PLUS importants du script a mettre en valeur "
+        "a l'ecran : chiffres, mots choc, mots sensoriels — extraits tels quels du texte).\n"
         "Pas de texte hors du JSON."
     )
     resp = client.models.generate_content(model="gemini-flash-latest", contents=prompt)
@@ -177,7 +190,7 @@ def _google_tts(text, audio_path, tone):
         json={
             "input": {"text": text},
             "voice": {"languageCode": "fr-FR", "name": GOOGLE_VOICE},
-            "audioConfig": {"audioEncoding": "MP3", "speakingRate": rate, "volumeGainDb": gain},
+            "audioConfig": {"audioEncoding": "LINEAR16", "speakingRate": rate, "volumeGainDb": gain},
         },
         timeout=30,
     )
@@ -185,17 +198,44 @@ def _google_tts(text, audio_path, tone):
     audio_path.write_bytes(base64.b64decode(r.json()["audioContent"]))
 
 
-def _synth(text, audio_path, tone):
-    """Choisit le moteur : Google Chirp 3 HD si cle presente, sinon edge-tts."""
-    if os.getenv("GOOGLE_TTS_API_KEY"):
-        _google_tts(text, audio_path, tone)
-    else:
-        rate, pitch, vol = TONES.get(tone, TONES["body"])
-        asyncio.run(_edge_tts(text, audio_path, rate, pitch, vol))
+_kokoro_pipe = None
+
+
+def _kokoro_tts(text, wav_path, tone):
+    """Kokoro (open-source, local) -> WAV pur (aucun re-encodage, voix propre)."""
+    global _kokoro_pipe
+    import numpy as np
+    import soundfile as sf
+    if _kokoro_pipe is None:
+        from kokoro import KPipeline
+        _kokoro_pipe = KPipeline(lang_code="f")     # 'f' = francais
+    speed = KOKORO_SPEED.get(tone, 1.0)
+    chunks = []
+    for _, _, audio in _kokoro_pipe(text, voice=KOKORO_VOICE, speed=speed):
+        chunks.append(audio.numpy() if hasattr(audio, "numpy") else np.asarray(audio))
+    data = np.concatenate(chunks) if chunks else np.zeros(1, dtype="float32")
+    sf.write(str(wav_path), data, 24000)
+
+
+def _synth(text, wav_path, tone):
+    """Ecrit un WAV pour un segment. Moteur selon TTS_ENGINE. Fallback edge-tts."""
+    try:
+        if TTS_ENGINE == "kokoro":
+            _kokoro_tts(text, wav_path, tone)
+            return
+        if TTS_ENGINE == "google" or os.getenv("GOOGLE_TTS_API_KEY"):
+            _google_tts(text, wav_path, tone)
+            return
+    except Exception as e:
+        print(f"[voix] moteur {TTS_ENGINE} indispo ({e}) -> edge-tts")
+    rate, pitch, vol = TONES.get(tone, TONES["body"])
+    tmp = wav_path.with_suffix(".mp3")
+    asyncio.run(_edge_tts(text, tmp, rate, pitch, vol))
+    subprocess.run(["ffmpeg", "-y", "-i", str(tmp), str(wav_path)], check=True, capture_output=True)
 
 
 def _silence(dur: float) -> Path:
-    p = WORK / f"sil_{dur}.mp3"
+    p = WORK / f"sil_{dur}.wav"
     subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-t", f"{dur}",
                     "-i", "anullsrc=r=24000:cl=mono", str(p)],
                    check=True, capture_output=True)
@@ -218,17 +258,17 @@ def make_voice(segments: list[dict]):
         if tone == "revelation":                      # beat dramatique avant la revelation
             files.append(_silence(PAUSE_BEFORE_REVELATION))
             timeline.append({"kind": "pause", "dur": PAUSE_BEFORE_REVELATION})
-        f = WORK / f"seg_{len(files)}.mp3"
+        f = WORK / f"seg_{len(files)}.wav"
         _synth(text, f, tone)
         files.append(f)
         timeline.append({"kind": "speech", "text": text, "tone": tone, "dur": _duration(f)})
 
-    # concatenation robuste (filtre concat, re-encode) : gere les params differents
+    # concatenation en WAV (lossless) : gere les params differents
     inputs = []
     for f in files:
         inputs += ["-i", str(f)]
     filt = "".join(f"[{i}:a]" for i in range(len(files))) + f"concat=n={len(files)}:v=0:a=1[a]"
-    audio = WORK / "voice.mp3"
+    audio = WORK / "voice.wav"
     subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex", filt, "-map", "[a]", str(audio)],
                    check=True, capture_output=True)
     total = sum(it["dur"] for it in timeline)
@@ -242,9 +282,57 @@ def _fmt_ass_time(t: float) -> str:
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
-def _karaoke_lines(text, seg_start, seg_dur, style, group=3, pop_from=64):
-    """Sous-titres karaoke dynamiques : rebond (overshoot) a l'apparition +
-    remplissage couleur mot par mot (effet CapCut)."""
+_whisper = None
+_EMPH_COLOR = r"&H0000A5FF&"      # orange (ASS &HBBGGRR) pour les mots importants
+_SUNG_COLOR = r"&H0000F0FF&"      # jaune (couleur "chantee" normale)
+
+
+def align_words(audio_path, language="fr"):
+    """Timestamps mot par mot via faster-whisper (alignement force = sync precise)."""
+    global _whisper
+    from faster_whisper import WhisperModel
+    if _whisper is None:
+        _whisper = WhisperModel("small", device="cpu", compute_type="int8")
+    segments, _ = _whisper.transcribe(str(audio_path), language=language, word_timestamps=True)
+    out = []
+    for seg in segments:
+        for w in (seg.words or []):
+            t = w.word.strip()
+            if t:
+                out.append({"word": t, "start": float(w.start), "end": float(w.end)})
+    return out
+
+
+def _emph_set(emphasis):
+    s = set()
+    for e in (emphasis or []):
+        for w in re.findall(r"\w+", str(e).lower()):
+            if len(w) > 1:
+                s.add(w)
+    return s
+
+
+def _aligned_line(g, style, base_fs, emph, offset):
+    """Une ligne de sous-titres depuis des mots alignes (timing reel + mots importants)."""
+    start = offset + g[0]["start"]
+    end = offset + g[-1]["end"] + 0.05
+    emph_fs = int(base_fs * 1.32)
+    toks = []
+    for j, w in enumerate(g):
+        d = (g[j + 1]["start"] - w["start"]) if j < len(g) - 1 else (w["end"] - w["start"])
+        cs = max(1, round(d * 100))
+        disp = re.sub(r"""[.,!?;:"']""", "", w["word"]).upper()
+        norm = re.sub(r"[^\w]", "", w["word"].lower())
+        if norm in emph:                       # mot important : plus gros + orange
+            toks.append(rf"{{\kf{cs}\fs{emph_fs}\1c{_EMPH_COLOR}}}{disp}{{\fs{base_fs}\1c{_SUNG_COLOR}}}")
+        else:
+            toks.append(rf"{{\kf{cs}}}{disp}")
+    anim = r"{\fad(45,0)\fscx64\fscy64\t(0,95,\fscx112\fscy112)\t(95,180,\fscx100\fscy100)}"
+    return f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},{style},{anim + ' '.join(toks)}"
+
+
+def _karaoke_lines(text, seg_start, seg_dur, style, group=3):
+    """Fallback si l'alignement echoue : timing estime au prorata des caracteres."""
     words = text.replace(",", "").replace(".", "").split()
     if not words:
         return []
@@ -254,22 +342,16 @@ def _karaoke_lines(text, seg_start, seg_dur, style, group=3, pop_from=64):
     out, t = [], seg_start
     for g in groups:
         dur = sum(len(w) + 1 for w in g) * span
-        start, end = t, t + dur
-        t = end
         parts = [rf"{{\kf{max(1, round((len(w) + 1) * span * 100))}}}{w.upper()}" for w in g]
-        # apparition : fondu rapide + rebond avec depassement (pop -> 112% -> 100%)
-        anim = (rf"{{\fad(45,0)\fscx{pop_from}\fscy{pop_from}"
-                r"\t(0,95,\fscx112\fscy112)\t(95,180,\fscx100\fscy100)}")
-        txt = anim + " ".join(parts)
-        out.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},{style},{txt}")
+        anim = r"{\fad(45,0)\fscx64\fscy64\t(0,95,\fscx112\fscy112)\t(95,180,\fscx100\fscy100)}"
+        out.append(f"Dialogue: 0,{_fmt_ass_time(t)},{_fmt_ass_time(t + dur)},{style},{anim + ' '.join(parts)}")
+        t += dur
     return out
 
 
-def build_subtitles(timeline, total, ass_path, offset=0.0):
-    """ASS karaoke pilote par la timeline de la voix (sync parfaite avec l'audio).
-
-    Hook en gros/centre, reste en bas. Les pauses avancent le temps sans texte.
-    """
+def build_subtitles(timeline, words, total, ass_path, emphasis=None, offset=0.0, group=3):
+    """Sous-titres karaoke. Si `words` (alignes) fournis -> sync mot par mot + mots
+    importants mis en valeur. Sinon fallback sur le timing estime de la timeline."""
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -279,32 +361,44 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Def,{FONT},126,&H0000FFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,8,4,2,90,90,600,1
-Style: Hook,{FONT},152,&H0000FFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,1,10,5,5,90,90,0,1
-Style: Outro,{FONT},108,&H0000FFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,2,0,1,9,5,5,140,140,0,1
+Style: Def,{FONT},130,&H0000F0FF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,2,0,1,8,5,2,90,90,610,1
+Style: Hook,{FONT},156,&H0000F0FF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,2,0,1,11,6,5,90,90,0,1
+Style: Outro,{FONT},110,&H0000F0FF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,2,0,1,9,6,5,140,140,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Text
 """
-    lines, t = [], offset
-    for it in timeline:
-        if it["kind"] == "pause":
-            t += it["dur"]
-            continue
-        # le hook s'affiche en gros et centre ; le reste en bas
-        style = "Hook" if it["tone"] == "hook" else "Def"
-        pop = 75 if style == "Hook" else 90
-        lines += _karaoke_lines(it["text"], t, it["dur"], style, group=3, pop_from=pop)
-        t += it["dur"]
+    emph = _emph_set(emphasis)
+    hook_dur = timeline[0]["dur"] if timeline and timeline[0].get("kind") == "speech" else 0.0
+    lines = []
 
-    # Outro
-    outro_start = t + 0.15
+    if words:                                   # --- sync mot par mot (aligne)
+        for i in range(0, len(words), group):
+            g = words[i:i + group]
+            style = "Hook" if g[0]["start"] < hook_dur else "Def"
+            base_fs = 156 if style == "Hook" else 130
+            lines.append(_aligned_line(g, style, base_fs, emph, offset))
+        last_end = offset + words[-1]["end"]
+        mode = "aligne"
+    else:                                       # --- fallback timing estime
+        t = offset
+        for it in timeline:
+            if it["kind"] == "pause":
+                t += it["dur"]
+                continue
+            style = "Hook" if it["tone"] == "hook" else "Def"
+            lines += _karaoke_lines(it["text"], t, it["dur"], style, group=group)
+            t += it["dur"]
+        last_end = t
+        mode = "estime"
+
+    outro_start = last_end + 0.15
     outro_txt = (r"{\fad(350,400)\an5\fscx70\fscy70"
                  r"\t(0,400,\fscx100\fscy100)}" + OUTRO_TEXT)
     lines.append(f"Dialogue: 1,{_fmt_ass_time(outro_start)},{_fmt_ass_time(total - 0.1)},Outro,{outro_txt}")
 
     ass_path.write_text(header + "\n".join(lines), encoding="utf-8")
-    print(f"[subs] {sum(1 for i in timeline if i['kind']=='speech')} segments karaoke + outro -> {ass_path.name}")
+    print(f"[subs] {len(lines) - 1} lignes ({mode}) + outro -> {ass_path.name}")
 
 
 # ---------------------------------------------------------------- 4. visuels
@@ -320,12 +414,14 @@ def fetch_clips(keywords: list[str], n: int = 4) -> list[Path]:
         r = requests.get(
             "https://api.pexels.com/videos/search",
             headers={"Authorization": key},
-            params={"query": kw, "orientation": "portrait", "per_page": 3, "size": "medium"},
+            params={"query": kw, "orientation": "portrait", "per_page": 3, "size": "large"},
             timeout=30,
         )
         for vid in r.json().get("videos", []):
-            files = [f for f in vid["video_files"] if f.get("height", 0) >= 1080]
-            best = min(files or vid["video_files"], key=lambda f: abs(f.get("height", 0) - 1920))
+            files = vid["video_files"]
+            hd = [f for f in files if f.get("height", 0) >= 1920]
+            # au moins 1920px de haut si dispo (net apres crop), sinon le plus grand
+            best = min(hd, key=lambda f: f["height"]) if hd else max(files, key=lambda f: f.get("height", 0))
             dst = WORK / f"clip_{len(clips)}.mp4"
             with requests.get(best["link"], stream=True, timeout=60) as s:
                 with open(dst, "wb") as f:
@@ -363,20 +459,31 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
     # --- Fond video (clips ou noir), couvrant tout le total
     if clips:
         per = total / len(clips) + 0.6
+        bw, bh = int(W * 1.25), int(H * 1.25)     # source un peu plus grande pour zoomer sans perte
         parts = []
         for i, c in enumerate(clips):
             p = WORK / f"seg_{i}.mp4"
+            # Ken Burns : zoom lent, alterne avant (pairs) / arriere (impairs)
+            z = "min(1+0.0010*on,1.22)" if i % 2 == 0 else "max(1.22-0.0010*on,1.0)"
+            vf = (f"scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
+                  f"zoompan=z='{z}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                  f"s={W}x{H}:fps=30,setsar=1")
             subprocess.run(
                 ["ffmpeg", "-y", "-i", str(c), "-t", f"{per:.2f}",
-                 "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1",
-                 "-an", "-r", "30", str(p)],
+                 "-vf", vf, "-an", "-r", "30",
+                 "-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p",
+                 str(p)],
                 check=True, capture_output=True)
             parts.append(p)
         concat = WORK / "list.txt"
         concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts))
         bg = WORK / "bg.mp4"
+        # re-encodage (PAS -c copy) : force des timestamps continus (cfr) sinon
+        # le zoompan casse les PTS et l'audio est tronque au montage final.
         subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
-                        "-c", "copy", str(bg)], check=True, capture_output=True)
+                        "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+                        "-pix_fmt", "yuv420p", "-r", "30", "-vsync", "cfr", str(bg)],
+                       check=True, capture_output=True)
         vid_in = ["-i", str(bg)]
     else:
         vid_in = ["-f", "lavfi", "-t", f"{total:.2f}", "-i", f"color=c=black:s={W}x{H}:r=30"]
@@ -387,10 +494,9 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
 
     # --- Chaine audio : voix decalee + compressee/boostee (elle claque) + musique
     inputs = ["-i", str(audio)]                       # input 1 = voix
+    # voix BRUTE (aucun filtre) : juste decalage d'intro + longueur. YouTube normalise le volume a la lecture.
     voc = (f"[1:a]aformat=sample_rates=44100:channel_layouts=stereo,"
-           f"adelay={lead_ms}|{lead_ms},apad,atrim=0:{total:.2f},"
-           f"acompressor=threshold=0.08:ratio=4:attack=5:release=180,"
-           f"volume=1.6,alimiter=limit=0.95")
+           f"adelay={lead_ms}|{lead_ms},apad,atrim=0:{total:.2f}")
     if music:
         inputs += ["-stream_loop", "-1", "-i", str(music)]   # input 2 = musique (bouclee)
         achain = (
@@ -401,13 +507,11 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
             f"afade=t=in:st=0:d=1.2,afade=t=out:st={total - 1.6:.2f}:d=1.6[mus0];"
             # ducking : la musique baisse quand la voix parle
             f"[mus0][vocsc]sidechaincompress=threshold=0.03:ratio=8:attack=5:release=280[mus];"
-            f"[voc][mus]amix=inputs=2:duration=first:normalize=0[mix];"
-            # loudness au niveau des plateformes (~-14 LUFS) = ca sonne fort et pro
-            f"[mix]loudnorm=I=-14:TP=-1.5:LRA=11[aout]"
+            f"[voc][mus]amix=inputs=2:duration=first:normalize=0[aout]"
         )
         print(f"[musique] {music.name}")
     else:
-        achain = voc + ",loudnorm=I=-14:TP=-1.5:LRA=11[aout]"
+        achain = voc + "[aout]"
         print("[musique] aucune (depose un .mp3 dans music/)")
 
     OUT_DIR.mkdir(exist_ok=True)
@@ -415,7 +519,8 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
         ["ffmpeg", "-y", *vid_in, *inputs,
          "-filter_complex", vchain + ";" + achain,
          "-map", "[v]", "-map", "[aout]", "-t", f"{total:.2f}",
-         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(out)],
+         "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-b:a", "192k", str(out)],
         check=True, capture_output=True)
     print(f"[montage] OK ({total:.1f}s) -> {out}")
 
@@ -433,20 +538,42 @@ def main():
     audio, timeline = make_voice(segments)
     voice_dur = sum(it["dur"] for it in timeline)
     total = LEAD + voice_dur + TAIL          # ~0.3s + voix + outro
+    try:
+        words = align_words(audio)           # sync mot par mot (faster-whisper)
+        print(f"[align] {len(words)} mots alignes")
+    except Exception as e:
+        print(f"[align] echec ({e}) -> timing estime")
+        words = None
     ass = WORK / "subs.ass"
-    build_subtitles(timeline, total, ass, offset=LEAD)
-    clips = fetch_clips(script.get("keywords", [topic]))
+    build_subtitles(timeline, words, total, ass, emphasis=script.get("emphasis"), offset=LEAD)
+    clips = fetch_clips(script.get("keywords", [topic]), n=6)
 
     out = OUT_DIR / "short.mp4"
     assemble(audio, ass, clips, out, total)
 
-    # Sauve les metadonnees pour l'upload
-    (OUT_DIR / "meta.json").write_text(
-        json.dumps({"title": script["title"] + " #Shorts",
-                    "description": narration + "\n\n#Shorts #shorts",
-                    "tags": (script.get("keywords", []) + ["shorts"])}, ensure_ascii=False, indent=2),
-        encoding="utf-8")
+    meta = {"title": script["title"] + " #Shorts",
+            "description": narration + "\n\n#Shorts #shorts",
+            "tags": (script.get("keywords", []) + ["shorts"]),
+            "topic": topic,
+            "created": datetime.now().isoformat(timespec="seconds")}
+    (OUT_DIR / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    archive(out, meta)
     print("\nTermine. Verifie output/short.mp4")
+
+
+def archive(video: Path, meta: dict):
+    """Copie la video + meta + vignette dans output/lib/<date>_<slug>/ (galerie)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", meta["topic"].lower()).strip("-")[:40] or "video"
+    folder = OUT_DIR / "lib" / f"{datetime.now():%Y%m%d_%H%M%S}_{slug}"
+    folder.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(video, folder / "short.mp4")
+    (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    # vignette (1 image a ~1s)
+    subprocess.run(["ffmpeg", "-y", "-ss", "1", "-i", str(video), "-frames:v", "1",
+                    "-vf", "scale=360:-1", str(folder / "poster.jpg")],
+                   capture_output=True)
+    print(f"[galerie] archive -> {folder}")
 
 
 if __name__ == "__main__":

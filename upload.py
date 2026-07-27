@@ -43,12 +43,14 @@ def auth_flow():
     print("token.json cree. Copie son contenu dans le secret GitHub YT_TOKEN.")
 
 
-def upload():
+def upload(base="output"):
+    """Uploade base/short.mp4 avec base/meta.json (base = 'output' ou un dossier galerie)."""
     _write_from_env()
     creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES)
     yt = build("youtube", "v3", credentials=creds)
 
-    meta = json.loads(Path("output/meta.json").read_text(encoding="utf-8"))
+    base = Path(base)
+    meta = json.loads((base / "meta.json").read_text(encoding="utf-8"))
     body = {
         "snippet": {
             "title": meta["title"][:100],
@@ -59,14 +61,15 @@ def upload():
         "status": {"privacyStatus": os.getenv("YT_PRIVACY", "public"),
                    "selfDeclaredMadeForKids": False},
     }
-    media = MediaFileUpload("output/short.mp4", chunksize=-1, resumable=True)
+    media = MediaFileUpload(str(base / "short.mp4"), chunksize=-1, resumable=True)
     req = yt.videos().insert(part="snippet,status", body=body, media_body=media)
     resp = req.execute()
     print(f"Publie : https://youtu.be/{resp['id']}")
 
 
 if __name__ == "__main__":
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if "--auth" in sys.argv:
         auth_flow()
     else:
-        upload()
+        upload(args[0] if args else "output")
