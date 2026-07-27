@@ -92,31 +92,19 @@ MUSIC_VOL = 0.22                     # volume de la musique (0-1) ; ducking sous
 OUTRO_TEXT = "ABONNE-TOI POUR LA SUITE"
 OUT_DIR = Path("output")
 WORK = Path(tempfile.mkdtemp(prefix="short_"))
-DEFAULT_TOPICS = [
-    # --- Espace & univers
-    "les trous noirs", "l'espace", "le soleil", "la lune", "les etoiles",
-    "les galaxies", "Mars", "les trous de ver", "la vitesse de la lumiere",
-    # --- Corps humain & cerveau
-    "le cerveau humain", "le sommeil", "les reves", "le coeur humain",
-    "l'ADN", "le systeme immunitaire", "la memoire", "les yeux",
-    # --- Animaux
-    "les fourmis", "les pieuvres", "les requins", "les abeilles",
-    "les dauphins", "les chats", "les manchots", "les meduses immortelles",
-    "les axolotls", "les corbeaux", "les tardigrades",
-    # --- Nature & Terre
-    "les oceans profonds", "les volcans", "les seismes", "la foudre",
-    "les aurores boreales", "les deserts", "la foret amazonienne",
-    "les grottes", "le noyau de la Terre",
-    # --- Histoire & civilisations
-    "l'Egypte antique", "les pyramides", "l'Empire romain", "les Vikings",
-    "les samourais", "la Grande Muraille de Chine", "les Mayas",
-    # --- Science & tech
-    "la physique quantique", "l'intelligence artificielle", "les mathematiques",
-    "l'or", "les diamants", "internet", "les fusees",
-    # --- Mysteres & insolite
-    "le triangle des Bermudes", "les illusions d'optique", "le temps",
-    "les nombres premiers", "la chance",
-]
+def _load_topics():
+    """Charge la grande liste de sujets depuis topics.txt (1 par ligne, # = commentaire)."""
+    f = Path(__file__).with_name("topics.txt")
+    if f.exists():
+        t = [l.strip() for l in f.read_text(encoding="utf-8").splitlines()
+             if l.strip() and not l.strip().startswith("#")]
+        if t:
+            return t
+    return ["les trous noirs", "le cerveau humain", "les requins", "les volcans",
+            "l'Egypte antique", "les pieuvres", "l'espace", "les reves"]
+
+
+DEFAULT_TOPICS = _load_topics()
 
 
 # ---------------------------------------------------------------- 1. script
