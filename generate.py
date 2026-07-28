@@ -91,6 +91,10 @@ LEAD = 0.3                           # quasi pas d'intro : le hook demarre tout 
 TAIL = 2.0                           # petite outro pour ne pas couper net
 CUT_MIN, CUT_MAX = 2.2, 3.6          # duree d'un plan (guide : 1 jump cut toutes les 2-4 s)
 SFX_HOOK = True                      # "boom" d'impact sur le hook (pattern interrupt sonore)
+# Coupe des blancs : seuil -30dB (le "silence" du TTS n'est pas totalement muet),
+# ne garde que 0.08s de respiration, agit des 0.10s de pause -> debit serre.
+SILENCE_FILTER = ("silenceremove=start_periods=1:start_threshold=-30dB:start_silence=0.03:"
+                  "stop_periods=-1:stop_threshold=-30dB:stop_silence=0.08:stop_duration=0.10")
 MUSIC_DIR = Path("music")            # depose des .mp3 ici (musique de fond, choix aleatoire)
 MUSIC_VOL = 0.22                     # volume de la musique (0-1) ; ducking sous la voix
 OUTRO_TEXT = "ABONNE-TOI POUR LA SUITE"
@@ -269,11 +273,7 @@ def _trim_silence(src: Path, dst: Path) -> Path:
     Le guide hook insiste : 'supprimer les blancs et l'inutile'."""
     try:
         subprocess.run(
-            ["ffmpeg", "-y", "-i", str(src), "-af",
-             # silence de tete, puis pauses internes > 0.35s ramenees a 0.15s, puis silence de queue
-             "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.05:"
-             "stop_periods=-1:stop_threshold=-45dB:stop_silence=0.15:stop_duration=0.35",
-             str(dst)],
+            ["ffmpeg", "-y", "-i", str(src), "-af", SILENCE_FILTER, str(dst)],
             check=True, capture_output=True)
         if dst.exists() and _duration(dst) > 0.25:      # garde-fou : on n'a pas tout coupe
             return dst
