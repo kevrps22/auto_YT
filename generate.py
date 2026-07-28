@@ -60,12 +60,14 @@ VOICE = os.getenv("VOICE", "fr-CA-AntoineNeural")   # voix edge-tts (configurabl
 GOOGLE_VOICE = "fr-FR-Chirp3-HD-Charon"        # voix Google Chirp 3 HD (masculine, naturelle)
 # Ton edge-tts (rate, pitch, volume) par segment.
 # Pitch volontairement FAIBLE : de gros decalages rendent la voix robotique.
+# Rythme SOUTENU (guide hook) : debit eleve = plus d'infos/seconde = meilleure retention.
+# Le pitch reste faible (un gros decalage rend la voix robotique).
 TONES = {
-    "hook":       ("+9%",  "+3Hz", "+0%"),   # energie via le rythme, pas le pitch
-    "tension":    ("+2%",  "+1Hz", "+0%"),
-    "body":       ("+2%",  "+0Hz", "+0%"),
-    "revelation": ("-4%",  "+1Hz", "+0%"),
-    "loop":       ("+4%",  "+0Hz", "+0%"),
+    "hook":       ("+20%", "+4Hz", "+0%"),   # attaque rapide et energique
+    "tension":    ("+14%", "+2Hz", "+0%"),
+    "body":       ("+12%", "+0Hz", "+0%"),   # debit rapide mais intelligible
+    "revelation": ("+4%",  "+2Hz", "+0%"),   # on ralentit pour l'impact
+    "loop":       ("+14%", "+0Hz", "+0%"),
 }
 # Ton Google (speakingRate, volumeGainDb) par segment (Chirp 3 HD ne gere pas le pitch).
 GTONES = {
@@ -87,6 +89,8 @@ FONT = "Anton"                       # police des sous-titres (fichier dans font
 
 LEAD = 0.3                           # quasi pas d'intro : le hook demarre tout de suite
 TAIL = 2.0                           # petite outro pour ne pas couper net
+CUT_MIN, CUT_MAX = 2.2, 3.6          # duree d'un plan (guide : 1 jump cut toutes les 2-4 s)
+SFX_HOOK = True                      # "boom" d'impact sur le hook (pattern interrupt sonore)
 MUSIC_DIR = Path("music")            # depose des .mp3 ici (musique de fond, choix aleatoire)
 MUSIC_VOL = 0.22                     # volume de la musique (0-1) ; ducking sous la voix
 OUTRO_TEXT = "ABONNE-TOI POUR LA SUITE"
@@ -128,23 +132,50 @@ def make_script(topic: str) -> dict:
     from google import genai
     client = genai.Client(api_key=key)
     prompt = (
-        f"Ecris un script pour un YouTube Short en francais sur : {topic}.\n"
-        "Structure NARRATIVE obligatoire (storytelling, PAS une liste de faits) :\n"
-        "1) HOOK (0-3s) : une phrase choc qui INVERSE une croyance ou pose une question "
-        "extreme. Cree un vide d'information. Ton exclamatif. Ex: "
-        "'La lave n'est MEME PAS ce qui te tue en premier dans un volcan.'\n"
-        "2) TENSION (3-8s) : 1 phrase qui accentue le mystere et retarde la reponse. Ex: "
-        "'En realite, la plupart des victimes ne touchent jamais la lave.'\n"
-        "3) BODY (8-35s) : 2 a 4 phrases qui expliquent le phenomene, avec des mots "
-        "sensoriels et forts (fondre, pulveriser, explosion). Chaque phrase apporte une "
-        "info nouvelle et marquante.\n"
-        "4) REVELATION (35-45s) : 1 phrase avec le fait le plus fascinant/choquant.\n"
-        "5) LOOP (45-50s) : 1 phrase de conclusion qui s'enchaine logiquement avec le HOOK "
-        "(pour donner envie de revoir la video).\n"
-        "REGLES : phrases COURTES, une idee par phrase. Tutoiement. AUCUN 'salut', "
-        "'aujourd'hui', 'bienvenue'. Rentre direct dans le sujet. Style parle et rythme.\n"
+        f"Tu es un expert des YouTube Shorts viraux. Ecris un script en francais sur : {topic}.\n"
+        "\n"
+        "=== LE HOOK EST LA PRIORITE ABSOLUE (0 a 3 secondes) ===\n"
+        "Il doit STOPPER LE SCROLL en activant au moins 2 de ces 5 leviers psychologiques :\n"
+        "  - CURIOSITE : creer un manque d'information que le cerveau VEUT combler.\n"
+        "  - SURPRISE/CONTRASTE : idee contre-intuitive qui casse une croyance.\n"
+        "  - URGENCE : sentiment de rater quelque chose d'important.\n"
+        "  - BENEFICE : promesse concrete et immediate.\n"
+        "  - PREUVE SOCIALE : chiffre, pourcentage, ce que font/ignorent les autres.\n"
+        "\n"
+        "Genere 3 hooks DIFFERENTS en utilisant 3 formules distinctes parmi :\n"
+        "  1. STATISTIQUE CHOC : un chiffre enorme et concret. "
+        "Ex: 'Ton corps remplace 330 milliards de cellules. Chaque jour.'\n"
+        "  2. CONTRARIAN : detruire une croyance repandue. "
+        "Ex: 'La lave n'est MEME PAS ce qui te tue en premier.'\n"
+        "  3. QUESTION/PROBLEME : question extreme qui interpelle directement. "
+        "Ex: 'Pourquoi ton cerveau efface 90% de ce que tu vois ?'\n"
+        "  4. IMPERATIF/ALERTE : ordre direct qui stoppe net. "
+        "Ex: 'Arrete de croire ca sur les requins.'\n"
+        "  5. PROMESSE DIRECTE : benefice clair et minute. "
+        "Ex: 'En 30 secondes tu ne regarderas plus jamais la lune pareil.'\n"
+        "  6. PERSONNALISATION : implique le spectateur avec 'ton/tu'. "
+        "Ex: 'Il y a un organe dans ton corps que personne ne t'a appris.'\n"
+        "\n"
+        "REGLES DU HOOK : 6 a 12 mots MAX. Present. Tutoiement. Concret (pas d'abstraction). "
+        "INTERDIT : 'savais-tu', 'bienvenue', 'aujourd'hui', 'dans cette video', 'incroyable' seul. "
+        "Le hook doit pouvoir se comprendre SANS contexte.\n"
+        "Puis choisis LE MEILLEUR des 3 (celui qui stoppe le plus le scroll) comme 'hook'.\n"
+        "\n"
+        "=== STRUCTURE DU RESTE (storytelling, PAS une liste) ===\n"
+        "TENSION (3-8s) : 1 phrase qui creuse le mystere et RETARDE la reponse.\n"
+        "BODY (8-30s) : 2 a 3 phrases COURTES qui expliquent, avec des mots sensoriels "
+        "forts (fondre, pulveriser, exploser, ecraser). Chaque phrase = une info nouvelle.\n"
+        "REVELATION : 1 phrase avec le fait le plus choquant/fascinant.\n"
+        "LOOP : 1 phrase finale qui s'enchaine logiquement avec le HOOK (rewatch).\n"
+        "\n"
+        "REGLES GLOBALES : phrases TRES courtes (max 12 mots), une idee par phrase, "
+        "rythme rapide, zero mot inutile, zero remplissage. Style parle.\n"
+        "\n"
         "Reponds UNIQUEMENT en JSON strict avec les cles : "
-        "title (string accrocheur), hook, tension, body, revelation, loop (strings), "
+        "title (string accrocheur), "
+        "hook_variants (liste des 3 hooks generes), "
+        "hook (le meilleur des 3, repete tel quel), "
+        "tension, body, revelation, loop (strings), "
         "keywords (liste de 3 mots-cles anglais pour chercher des videos stock), "
         "emphasis (liste des 6 a 10 mots LES PLUS importants du script a mettre en valeur "
         "a l'ecran : chiffres, mots choc, mots sensoriels — extraits tels quels du texte).\n"
@@ -154,6 +185,9 @@ def make_script(topic: str) -> dict:
     raw = resp.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     data = json.loads(raw)
     print(f"[script] genere : {data['title']}")
+    for i, h in enumerate(data.get("hook_variants", []), 1):
+        mark = ">>" if h.strip() == data.get("hook", "").strip() else "  "
+        print(f"  {mark} hook {i}: {h}")
     return data
 
 
@@ -230,6 +264,24 @@ def _silence(dur: float) -> Path:
     return p
 
 
+def _trim_silence(src: Path, dst: Path) -> Path:
+    """Coupe les blancs (debut, fin et longues pauses internes) -> rythme serre.
+    Le guide hook insiste : 'supprimer les blancs et l'inutile'."""
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src), "-af",
+             # silence de tete, puis pauses internes > 0.35s ramenees a 0.15s, puis silence de queue
+             "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.05:"
+             "stop_periods=-1:stop_threshold=-45dB:stop_silence=0.15:stop_duration=0.35",
+             str(dst)],
+            check=True, capture_output=True)
+        if dst.exists() and _duration(dst) > 0.25:      # garde-fou : on n'a pas tout coupe
+            return dst
+    except Exception:
+        pass
+    return src
+
+
 def make_voice(segments: list[dict]):
     """Genere la voix segment par segment (chacun son ton), avec micro-pause
     avant la revelation. Renvoie (audio_path, timeline).
@@ -246,8 +298,9 @@ def make_voice(segments: list[dict]):
         if tone == "revelation":                      # beat dramatique avant la revelation
             files.append(_silence(PAUSE_BEFORE_REVELATION))
             timeline.append({"kind": "pause", "dur": PAUSE_BEFORE_REVELATION})
-        f = WORK / f"seg_{len(files)}.wav"
-        _synth(text, f, tone)
+        raw = WORK / f"raw_{len(files)}.wav"
+        _synth(text, raw, tone)
+        f = _trim_silence(raw, WORK / f"seg_{len(files)}.wav")
         files.append(f)
         timeline.append({"kind": "speech", "text": text, "tone": tone, "dur": _duration(f)})
 
@@ -446,23 +499,35 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
 
     # --- Fond video (clips ou noir), couvrant tout le total
     if clips:
-        per = total / len(clips) + 0.6
-        bw, bh = int(W * 1.25), int(H * 1.25)     # source un peu plus grande pour zoomer sans perte
-        parts = []
-        for i, c in enumerate(clips):
+        # Jump cuts toutes les CUT_MIN..CUT_MAX secondes (guide hook : 1 coupe / 2-4 s).
+        # On cycle sur les clips avec des offsets differents -> pas de repetition visible.
+        bw, bh = int(W * 1.25), int(H * 1.25)     # source plus grande pour zoomer sans perte
+        durations = [_duration(c) for c in clips]
+        parts, i, elapsed = [], 0, 0.0
+        while elapsed < total + 0.6:
+            c, src_dur = clips[i % len(clips)], durations[i % len(clips)]
+            cut = random.uniform(CUT_MIN, CUT_MAX)
+            lap = i // len(clips)                  # tour de boucle -> decale la portion utilisee
+            start = min(max(0.0, src_dur - cut - 0.1), lap * cut * 1.7)
             p = WORK / f"seg_{i}.mp4"
-            # Ken Burns : zoom lent, alterne avant (pairs) / arriere (impairs)
-            z = "min(1+0.0010*on,1.22)" if i % 2 == 0 else "max(1.22-0.0010*on,1.0)"
+            # Ken Burns : zoom avant / arriere en alternance
+            z = "min(1+0.0016*on,1.25)" if i % 2 == 0 else "max(1.25-0.0016*on,1.0)"
             vf = (f"scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
                   f"zoompan=z='{z}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
                   f"s={W}x{H}:fps=30,setsar=1")
             subprocess.run(
-                ["ffmpeg", "-y", "-i", str(c), "-t", f"{per:.2f}",
+                ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(c), "-t", f"{cut:.2f}",
                  "-vf", vf, "-an", "-r", "30",
                  "-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p",
                  str(p)],
                 check=True, capture_output=True)
-            parts.append(p)
+            if p.exists() and _duration(p) > 0.4:
+                parts.append(p)
+                elapsed += _duration(p)
+            i += 1
+            if i > 60:                             # garde-fou
+                break
+        print(f"[montage] {len(parts)} plans (~{total / max(1, len(parts)):.1f}s/plan)")
         concat = WORK / "list.txt"
         concat.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts))
         bg = WORK / "bg.mp4"
@@ -498,12 +563,22 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
             f"afade=t=in:st=0:d=1.2,afade=t=out:st={total - 1.6:.2f}:d=1.6[mus0];"
             # ducking : la musique baisse quand la voix parle
             f"[mus0][vocsc]sidechaincompress=threshold=0.03:ratio=8:attack=5:release=280[mus];"
-            f"[voc][mus]amix=inputs=2:duration=first:normalize=0[aout]"
+            f"[voc][mus]amix=inputs=2:duration=first:normalize=0[mixed]"
         )
         print(f"[musique] {music.name}")
     else:
-        achain = voc + "[aout]"
+        achain = voc + "[mixed]"
         print("[musique] aucune (depose un .mp3 dans music/)")
+
+    if SFX_HOOK:
+        # "boom" cinematique synthetise (sinus descendant + decroissance) sur le hook -> pattern interrupt
+        achain += (
+            ";aevalsrc='0.75*exp(-4.5*t)*sin(2*PI*(150*t-95*t*t))':d=0.9:s=44100:c=stereo,"
+            f"adelay={lead_ms}|{lead_ms},apad,atrim=0:{total:.2f}[sfx];"
+            "[mixed][sfx]amix=inputs=2:duration=first:normalize=0[aout]"
+        )
+    else:
+        achain += ";[mixed]anull[aout]"
 
     OUT_DIR.mkdir(exist_ok=True)
     subprocess.run(
