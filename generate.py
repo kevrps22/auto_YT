@@ -182,7 +182,13 @@ def make_script(topic: str) -> dict:
         "tension, body, revelation, loop (strings), "
         "keywords (liste de 3 mots-cles anglais pour chercher des videos stock), "
         "emphasis (liste des 6 a 10 mots LES PLUS importants du script a mettre en valeur "
-        "a l'ecran : chiffres, mots choc, mots sensoriels — extraits tels quels du texte).\n"
+        "a l'ecran : chiffres, mots choc, mots sensoriels — extraits tels quels du texte), "
+        "virality (entier 0-100 : potentiel viral REEL et SEVERE du hook retenu. "
+        "Note haut si : parle du spectateur lui-meme (ton corps, ton argent), provoque "
+        "degout/peur/colere, detruit une croyance, chiffre hallucinant, sujet universel. "
+        "Note bas si : abstrait, lointain, niche, deja vu, tiede. Sois exigeant, "
+        "la moyenne doit tourner autour de 55), "
+        "virality_reason (1 phrase COURTE justifiant la note).\n"
         "Pas de texte hors du JSON."
     )
     resp = client.models.generate_content(model="gemini-flash-latest", contents=prompt)
@@ -192,6 +198,8 @@ def make_script(topic: str) -> dict:
     for i, h in enumerate(data.get("hook_variants", []), 1):
         mark = ">>" if h.strip() == data.get("hook", "").strip() else "  "
         print(f"  {mark} hook {i}: {h}")
+    if data.get("virality") is not None:
+        print(f"[viralite] {data['virality']}/100 - {data.get('virality_reason', '')}")
     return data
 
 
@@ -624,6 +632,9 @@ def main():
             "topic": topic,
             "tiktok": f"{tt_title} 👀🤯\n\n#pourtoi #fyp #lesaviezvous #culturegenerale "
                       "#incroyable #apprendresurtiktok #wtf",
+            "virality": script.get("virality"),
+            "virality_reason": script.get("virality_reason", ""),
+            "hook_variants": script.get("hook_variants", []),
             "created": datetime.now().isoformat(timespec="seconds")}
     (OUT_DIR / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -652,18 +663,29 @@ def make_thumbnail(title: str, out_jpg: Path):
     ttxt.unlink(missing_ok=True)
 
 
+def safe_filename(name: str) -> str:
+    """Nom de fichier Windows valide a partir du titre de la video."""
+    name = re.sub(r'[\\/:*?"<>|]', "", name).strip().strip(".")
+    name = re.sub(r"\s+", " ", name)
+    return name[:110] or "video"
+
+
 def archive(video: Path, meta: dict):
-    """Copie la video + meta + vignette + miniature dans output/lib/<date>_<slug>/."""
+    """Copie la video + meta + vignette + miniature dans output/lib/<date>_<slug>/.
+    Les fichiers portent le TITRE de la video (pas 'short')."""
     slug = re.sub(r"[^a-z0-9]+", "-", meta["topic"].lower()).strip("-")[:40] or "video"
     folder = OUT_DIR / "lib" / f"{datetime.now():%Y%m%d_%H%M%S}_{slug}"
     folder.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(video, folder / "short.mp4")
+
+    base = safe_filename(meta.get("title", slug))
+    shutil.copy2(video, folder / f"{base}.mp4")
+    meta["file"] = f"{base}.mp4"
     (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    # vignette (pour la galerie de l'app)
+    # vignette interne (galerie de l'app)
     subprocess.run(["ffmpeg", "-y", "-ss", "1", "-i", str(video), "-frames:v", "1",
                     "-vf", "scale=360:-1", str(folder / "poster.jpg")], capture_output=True)
     # miniature YouTube (frame propre + titre)
-    make_thumbnail(meta.get("title", ""), folder / "thumbnail.jpg")
+    make_thumbnail(meta.get("title", ""), folder / f"{base} - miniature.jpg")
     print(f"[galerie] archive -> {folder}")
 
 

@@ -51,6 +51,13 @@ def upload(base="output"):
 
     base = Path(base)
     meta = json.loads((base / "meta.json").read_text(encoding="utf-8"))
+    # le fichier porte le titre de la video (ancien format : short.mp4)
+    video = base / meta.get("file", "short.mp4")
+    if not video.exists():
+        mp4s = sorted(base.glob("*.mp4"))
+        if not mp4s:
+            sys.exit(f"Aucun .mp4 dans {base}")
+        video = mp4s[0]
     body = {
         "snippet": {
             "title": meta["title"][:100],
@@ -61,7 +68,7 @@ def upload(base="output"):
         "status": {"privacyStatus": os.getenv("YT_PRIVACY", "public"),
                    "selfDeclaredMadeForKids": False},
     }
-    media = MediaFileUpload(str(base / "short.mp4"), chunksize=-1, resumable=True)
+    media = MediaFileUpload(str(video), chunksize=-1, resumable=True)
     req = yt.videos().insert(part="snippet,status", body=body, media_body=media)
     resp = req.execute()
     print(f"Publie : https://youtu.be/{resp['id']}")
