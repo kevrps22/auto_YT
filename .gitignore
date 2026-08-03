@@ -2,6 +2,13 @@ output/
 dashboard.html
 history.json
 .env
+
+# --- app Flutter (artefacts generes, recrees par `flutter build`) ---
+app/build/
+app/.dart_tool/
+app/windows/flutter/ephemeral/
+app/.flutter-plugins*
+*.iml
 client_secret.json
 token.json
 __pycache__/

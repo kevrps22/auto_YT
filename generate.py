@@ -19,6 +19,7 @@ Usage :
 
 import asyncio
 import json
+import math
 import os
 import random
 import re
@@ -63,10 +64,10 @@ GOOGLE_VOICE = "fr-FR-Chirp3-HD-Charon"        # voix Google Chirp 3 HD (masculi
 # Rythme SOUTENU (guide hook) : debit eleve = plus d'infos/seconde = meilleure retention.
 # Le pitch reste faible (un gros decalage rend la voix robotique).
 TONES = {
-    "hook":       ("+20%", "+4Hz", "+0%"),   # attaque rapide et energique
-    "tension":    ("+14%", "+2Hz", "+0%"),
-    "body":       ("+12%", "+0Hz", "+0%"),   # debit rapide mais intelligible
-    "revelation": ("+4%",  "+2Hz", "+0%"),   # on ralentit pour l'impact
+    "hook":       ("+22%", "+5Hz", "+0%"),   # attaque rapide et energique
+    "tension":    ("+2%",  "-2Hz", "+0%"),   # TWIST : on ralentit et on descend -> revelation
+    "body":       ("+14%", "+0Hz", "+0%"),   # debit rapide mais intelligible
+    "revelation": ("-2%",  "+3Hz", "+0%"),   # chute : encore plus lent, ton qui remonte
     "loop":       ("+14%", "+0Hz", "+0%"),
 }
 # Ton Google (speakingRate, volumeGainDb) par segment (Chirp 3 HD ne gere pas le pitch).
@@ -83,14 +84,44 @@ KOKORO_VOICE = os.getenv("KOKORO_VOICE", "ff_siwis")
 KOKORO_SPEED = {"hook": 1.12, "tension": 1.0, "body": 1.0, "revelation": 0.92, "loop": 1.05}
 # Moteur voix : "kokoro" | "google" | "edge" (via .env TTS_ENGINE ; defaut edge)
 TTS_ENGINE = os.getenv("TTS_ENGINE", "edge").lower()
-PAUSE_BEFORE_REVELATION = 0.28       # micro-pause dramatique avant la revelation
+# Modeles Gemini essayes dans l'ordre (quota gratuit = 20 requetes/jour PAR modele)
+GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.0-flash", "gemini-flash-lite-latest",
+                 "gemini-2.0-flash-lite"]
+PAUSE_BEFORE_REVELATION = 0.32       # micro-pause dramatique avant la revelation finale
+PAUSE_BEFORE_TENSION = 0.26          # pause avant le TWIST (moment ou on nomme le sujet)
 W, H = 1080, 1920                    # format vertical Short
 FONT = "Anton"                       # police des sous-titres (fichier dans fonts/)
 
-LEAD = 0.3                           # quasi pas d'intro : le hook demarre tout de suite
+LEAD = 0.0                           # la voix demarre a la SECONDE 0, aucun temps mort
 TAIL = 2.0                           # petite outro pour ne pas couper net
 CUT_MIN, CUT_MAX = 2.2, 3.6          # duree d'un plan (guide : 1 jump cut toutes les 2-4 s)
-SFX_HOOK = True                      # "boom" d'impact sur le hook (pattern interrupt sonore)
+# --- Hook VISUEL : 60% des vues sont sans son -> l'image doit accrocher seule.
+HOOK_WINDOW = 3.2                    # duree de la zone "hook" traitee a part
+HOOK_CUT_MIN, HOOK_CUT_MAX = 0.45, 0.7  # coupes tres rapides = pattern interrupt permanent
+HOOK_PUNCH = True                    # snap zoom sur CHAQUE plan du hook
+HOOK_PUNCH_FROM = 1.55               # zoom de depart du punch d'ouverture
+HOOK_SHAKE = True                    # secousse camera sur le 1er plan (synchro avec le boom)
+HOOK_FLASH = True                    # flash blanc bref a chaque coupe du hook
+HOOK_GRADE = ("eq=contrast=1.18:saturation=1.30:brightness=0.02,"
+              "unsharp=5:5:0.8")     # image plus percutante + nettete accrue
+# --- VFX du hook (spectacle des 3 premieres secondes)
+VFX_GLITCH = True                    # aberration chromatique RGB a 0s (effet glitch cinema)
+VFX_GLITCH_AMP = 22                  # amplitude du decalage RGB en pixels
+VFX_DUTCH = True                     # dutch angle : plans inclines = instabilite/urgence
+VFX_DUTCH_DEG = 5.0                  # inclinaison en degres
+VFX_VIGNETTE = True                  # vignettage sur le hook : focalise le regard au centre
+HOOK_WORDS_PER_LINE = 2              # hook : 2 mots max a l'ecran (lecture instantanee)
+# --- Images IA pour le hook (Pollinations : gratuit, sans cle, illimite)
+AI_IMAGES = True                     # False -> uniquement du stock Pexels
+AI_IMAGE_COUNT = 3                   # nb d'images generees pour les premiers plans
+AI_IMAGE_TIMEOUT = 90
+AI_PUNCH_FROM = 1.22                 # zoom d'ouverture reduit sur les images (576x1024 natif)
+AI_IMAGE_STYLE = ("cinematic vertical shot, dramatic moody lighting, hyper realistic, "
+                  "shallow depth of field, film grain, high contrast, 9:16")
+SFX_HOOK = True                      # sound design du hook (boom + whoosh + riser)
+SFX_WHOOSH_AT = 0.5                  # whoosh cale sur le snap zoom
+SFX_CUT_AT, SFX_CUT_DUR = 1.5, 0.2   # coupure totale de la musique = vide auditif
+SFX_RISER_AT = 1.7                   # riser d'urgence juste apres le vide
 # Coupe des blancs : seuil -30dB (le "silence" du TTS n'est pas totalement muet),
 # ne garde que 0.08s de respiration, agit des 0.10s de pause -> debit serre.
 SILENCE_FILTER = ("silenceremove=start_periods=1:start_threshold=-30dB:start_silence=0.03:"
@@ -146,30 +177,51 @@ def make_script(topic: str) -> dict:
         "  - BENEFICE : promesse concrete et immediate.\n"
         "  - PREUVE SOCIALE : chiffre, pourcentage, ce que font/ignorent les autres.\n"
         "\n"
-        "Genere 3 hooks DIFFERENTS en utilisant 3 formules distinctes parmi :\n"
-        "  1. STATISTIQUE CHOC : un chiffre enorme et concret. "
-        "Ex: 'Ton corps remplace 330 milliards de cellules. Chaque jour.'\n"
-        "  2. CONTRARIAN : detruire une croyance repandue. "
-        "Ex: 'La lave n'est MEME PAS ce qui te tue en premier.'\n"
-        "  3. QUESTION/PROBLEME : question extreme qui interpelle directement. "
-        "Ex: 'Pourquoi ton cerveau efface 90% de ce que tu vois ?'\n"
-        "  4. IMPERATIF/ALERTE : ordre direct qui stoppe net. "
-        "Ex: 'Arrete de croire ca sur les requins.'\n"
-        "  5. PROMESSE DIRECTE : benefice clair et minute. "
-        "Ex: 'En 30 secondes tu ne regarderas plus jamais la lune pareil.'\n"
-        "  6. PERSONNALISATION : implique le spectateur avec 'ton/tu'. "
-        "Ex: 'Il y a un organe dans ton corps que personne ne t'a appris.'\n"
+        "*** REGLE ABSOLUE : L'INFORMATION GAP ***\n"
+        f"Le hook ne doit JAMAIS nommer le sujet ({topic}). Interdiction de dire le mot.\n"
+        "Utilise des POINTEURS : 'cet objet', 'ce truc', 'cette chose', 'ce detail', 'ca'.\n"
+        "Le spectateur doit finir le hook SANS savoir de quoi on parle, mais en ayant "
+        "desesperement besoin de le decouvrir.\n"
+        "Si le cerveau devine le sujet en moins de 1,5 seconde, il swipe. La predictibilite TUE.\n"
+        "  MAUVAIS (35% de retention) : 'Sans les satellites, ta carte bancaire ne marche plus.'\n"
+        "  EXCELLENT (82%) : 'Les banques prient chaque matin pour qu'une boite en metal "
+        "a 20 000 km ne tombe pas en panne.'\n"
         "\n"
-        "REGLES DU HOOK : 6 a 12 mots MAX. Present. Tutoiement. Concret (pas d'abstraction). "
-        "INTERDIT : 'savais-tu', 'bienvenue', 'aujourd'hui', 'dans cette video', 'incroyable' seul. "
-        "Le hook doit pouvoir se comprendre SANS contexte.\n"
-        "Puis choisis LE MEILLEUR des 3 (celui qui stoppe le plus le scroll) comme 'hook'.\n"
+        "*** REGLE 2 : LA CONSEQUENCE AVANT LA CAUSE ***\n"
+        "Commence par le desastre, la panique, le chiffre perdu — jamais par l'explication.\n"
+        "  MAUVAIS : 'Un satellite a bugue donc les banques ont ferme.'\n"
+        "  EXCELLENT : 'Toutes les banques du pays se sont effondrees en 1 seconde... "
+        "a cause d'une erreur a 20 000 km.'\n"
+        "\n"
+        "Genere 3 hooks DIFFERENTS avec 3 formules distinctes parmi :\n"
+        "  1. CHIFFRE CHOC + POINTEUR : 'Cinq milliards perdus chaque heure si CE truc s'arrete.'\n"
+        "  2. PARADOXE ABSURDE : 'Ton compte en banque est maintenu en vie par une horloge "
+        "qui flotte dans le vide.'\n"
+        "  3. MENACE IMMINENTE : 'Regarde bien ta carte. Dans 24h elle peut devenir "
+        "un bout de plastique inutile.'\n"
+        "  4. COMPARAISON WTF : 'Cet appareil coute 100 millions et son seul boulot, "
+        "c'est de verifier si tu as 2 euros.'\n"
+        "  5. SECRET INTERDIT : 'Ce que personne ne veut que tu saches sur CE truc "
+        "que tu utilises tous les jours.'\n"
+        "  6. HYPOTHESE APOCALYPTIQUE : 'Si on eteignait cet objet 3 secondes, "
+        "la civilisation s'effondrerait.'\n"
+        "  7. DESTRUCTEUR DE SWIPE : 'Arrete de scroller. Ce truc au-dessus de ta tete "
+        "decide de ton argent.'\n"
+        "  8. DETAIL QUOTIDIEN CACHE : 'La prochaine fois que tu entends ce BEEP "
+        "au supermarche, souviens-toi de ca.'\n"
+        "\n"
+        "REGLES DU HOOK : 8 a 16 mots. Present. Tutoiement. Ultra concret et sensoriel. "
+        "INTERDIT : nommer le sujet, 'savais-tu', 'bienvenue', 'aujourd'hui', 'dans cette video'. "
+        "Choisis LE MEILLEUR des 3 (celui qui cree la plus grosse dette de curiosite).\n"
         "\n"
         "=== STRUCTURE DU RESTE (storytelling, PAS une liste) ===\n"
-        "TENSION (3-8s) : 1 phrase qui creuse le mystere et RETARDE la reponse.\n"
-        "BODY (8-30s) : 2 a 3 phrases COURTES qui expliquent, avec des mots sensoriels "
-        "forts (fondre, pulveriser, exploser, ecraser). Chaque phrase = une info nouvelle.\n"
-        "REVELATION : 1 phrase avec le fait le plus choquant/fascinant.\n"
+        "TENSION (3-8s) : 1 phrase qui AGGRAVE le mystere. Tu peux enfin nommer le sujet ici, "
+        "mais tu dois immediatement relancer une question plus grosse. Ne resous RIEN.\n"
+        "BODY (8-30s) : 2 a 3 phrases COURTES. Chacune donne une micro-recompense "
+        "(un indice qui valide l'attente) MAIS ouvre une nouvelle sous-question. "
+        "Mots sensoriels violents : fondre, pulveriser, exploser, ecraser, devorer.\n"
+        "REVELATION : LA reponse finale, le fait le plus choquant. C'est SEULEMENT ici "
+        "que la tension se libere — jamais avant.\n"
         "LOOP : 1 phrase finale qui s'enchaine logiquement avec le HOOK (rewatch).\n"
         "\n"
         "REGLES GLOBALES : phrases TRES courtes (max 12 mots), une idee par phrase, "
@@ -180,7 +232,14 @@ def make_script(topic: str) -> dict:
         "hook_variants (liste des 3 hooks generes), "
         "hook (le meilleur des 3, repete tel quel), "
         "tension, body, revelation, loop (strings), "
-        "keywords (liste de 3 mots-cles anglais pour chercher des videos stock), "
+        "hook_keywords (liste de 3 prompts ANGLAIS pour illustrer les 2 premieres secondes. "
+        "REGLE : l'image doit porter la MEME TENSION que le texte, jamais une image neutre "
+        "ou paisible. Ajoute toujours l'emotion du hook (unsettling, oppressive, eerie, "
+        "claustrophobic, menacing, surreal, violent) au sujet filme. "
+        "MAUVAIS : 'person sleeping' pour un hook sur les hallucinations (trop paisible). "
+        "BON : 'sleeping person trapped in dark surreal void, eerie, oppressive'. "
+        "Objets/scenes filmables uniquement. Le PREMIER prompt illustre le tout debut du hook), "
+        "keywords (liste de 3 mots-cles anglais pour le reste de la video), "
         "emphasis (liste des 6 a 10 mots LES PLUS importants du script a mettre en valeur "
         "a l'ecran : chiffres, mots choc, mots sensoriels — extraits tels quels du texte), "
         "virality (entier 0-100 : potentiel viral REEL et SEVERE du hook retenu. "
@@ -191,9 +250,28 @@ def make_script(topic: str) -> dict:
         "virality_reason (1 phrase COURTE justifiant la note).\n"
         "Pas de texte hors du JSON."
     )
-    resp = client.models.generate_content(model="gemini-flash-latest", contents=prompt)
+    # Le quota gratuit est PAR MODELE (20 req/jour) : on bascule au suivant si epuise.
+    resp = None
+    for m in GEMINI_MODELS:
+        try:
+            resp = client.models.generate_content(model=m, contents=prompt)
+            break
+        except Exception as e:
+            if any(x in str(e) for x in ("RESOURCE_EXHAUSTED", "429", "NOT_FOUND", "404")):
+                print(f"[script] quota/modele {m} indispo -> suivant")
+                continue
+            raise
+    if resp is None:
+        raise RuntimeError("Tous les modeles Gemini sont epuises pour aujourd'hui.")
     raw = resp.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     data = json.loads(raw)
+    # Gemini renvoie parfois une LISTE de phrases au lieu d'une string -> on aplatit.
+    for k in ("title", "hook", "tension", "body", "revelation", "loop"):
+        v = data.get(k)
+        if isinstance(v, list):
+            data[k] = " ".join(str(x).strip() for x in v if str(x).strip())
+        elif v is not None and not isinstance(v, str):
+            data[k] = str(v)
     print(f"[script] genere : {data['title']}")
     for i, h in enumerate(data.get("hook_variants", []), 1):
         mark = ">>" if h.strip() == data.get("hook", "").strip() else "  "
@@ -303,9 +381,12 @@ def make_voice(segments: list[dict]):
         if not text:
             continue
         tone = seg.get("tone", "body")
-        if tone == "revelation":                      # beat dramatique avant la revelation
-            files.append(_silence(PAUSE_BEFORE_REVELATION))
-            timeline.append({"kind": "pause", "dur": PAUSE_BEFORE_REVELATION})
+        # beats dramatiques : avant le twist (on nomme enfin le sujet) et avant la chute
+        gap = {"tension": PAUSE_BEFORE_TENSION,
+               "revelation": PAUSE_BEFORE_REVELATION}.get(tone)
+        if gap:
+            files.append(_silence(gap))
+            timeline.append({"kind": "pause", "dur": gap})
         raw = WORK / f"raw_{len(files)}.wav"
         _synth(text, raw, tone)
         f = _trim_silence(raw, WORK / f"seg_{len(files)}.wav")
@@ -332,8 +413,10 @@ def _fmt_ass_time(t: float) -> str:
 
 
 _whisper = None
-_EMPH_COLOR = r"&H0000A5FF&"      # orange (ASS &HBBGGRR) pour les mots importants
-_SUNG_COLOR = r"&H0000F0FF&"      # jaune (couleur "chantee" normale)
+# Couleurs ASS = &HBBGGRR (inverse du hexa web). Psychologie des couleurs du guide :
+_EMPH_COLOR = r"&H006633FF&"      # rouge neon #FF3366 : mots chocs / danger
+_NUM_COLOR = r"&H00CCFF00&"       # cyan #00FFCC : chiffres et dates
+_SUNG_COLOR = r"&H0000FFFF&"      # jaune pur #FFFF00 : traite le plus vite par la retine
 
 
 def align_words(audio_path, language="fr"):
@@ -372,8 +455,10 @@ def _aligned_line(g, style, base_fs, emph, offset):
         cs = max(1, round(d * 100))
         disp = re.sub(r"""[.,!?;:"']""", "", w["word"]).upper()
         norm = re.sub(r"[^\w]", "", w["word"].lower())
-        if norm in emph:                       # mot important : plus gros + orange
+        if norm in emph:                       # mot choc : plus gros + rouge neon
             toks.append(rf"{{\kf{cs}\fs{emph_fs}\1c{_EMPH_COLOR}}}{disp}{{\fs{base_fs}\1c{_SUNG_COLOR}}}")
+        elif re.search(r"\d", disp):           # chiffre / date : cyan (contraste max)
+            toks.append(rf"{{\kf{cs}\1c{_NUM_COLOR}}}{disp}{{\1c{_SUNG_COLOR}}}")
         else:
             toks.append(rf"{{\kf{cs}}}{disp}")
     anim = r"{\fad(45,0)\fscx64\fscy64\t(0,95,\fscx112\fscy112)\t(95,180,\fscx100\fscy100)}"
@@ -410,9 +495,9 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Def,{FONT},130,&H0000F0FF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,2,0,1,8,5,2,90,90,610,1
-Style: Hook,{FONT},156,&H0000F0FF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,2,0,1,11,6,5,90,90,0,1
-Style: Outro,{FONT},110,&H0000F0FF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,2,0,1,9,6,5,140,140,0,1
+Style: Def,{FONT},130,&H0000FFFF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,2,0,1,8,5,2,90,90,610,1
+Style: Hook,{FONT},156,&H0000FFFF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,2,0,1,11,6,5,90,90,0,1
+Style: Outro,{FONT},110,&H0000FFFF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,2,0,1,9,6,5,140,140,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Text
@@ -422,11 +507,16 @@ Format: Layer, Start, End, Style, Text
     lines = []
 
     if words:                                   # --- sync mot par mot (aligne)
-        for i in range(0, len(words), group):
-            g = words[i:i + group]
-            style = "Hook" if g[0]["start"] < hook_dur else "Def"
+        i = 0
+        while i < len(words):
+            in_hook = words[i]["start"] < hook_dur
+            # hook : 2 mots max au centre (lecture instantanee) ; corps : 3 mots
+            step = HOOK_WORDS_PER_LINE if in_hook else group
+            g = words[i:i + step]
+            style = "Hook" if in_hook else "Def"
             base_fs = 156 if style == "Hook" else 130
             lines.append(_aligned_line(g, style, base_fs, emph, offset))
+            i += step
         last_end = offset + words[-1]["end"]
         mode = "aligne"
     else:                                       # --- fallback timing estime
@@ -451,35 +541,81 @@ Format: Layer, Start, End, Style, Text
 
 
 # ---------------------------------------------------------------- 4. visuels
-def fetch_clips(keywords: list[str], n: int = 4) -> list[Path]:
+_clip_seq = 0
+
+
+def fetch_ai_images(prompts: list[str], n: int = 3) -> list[Path]:
+    """Genere des images IA (Pollinations : gratuit, sans cle) pour illustrer le hook.
+    Le stock footage generique 'hurle PUB' au cerveau ; une image sur mesure, non.
+    Les plans du hook durant ~0.5s, l'animation (zoom/glitch) les rend indiscernables
+    d'un vrai plan video."""
+    global _clip_seq
+    if not AI_IMAGES:
+        return []
+    import urllib.parse
+    out = []
+    for i, p in enumerate(prompts[:n]):
+        full = f"{p}, {AI_IMAGE_STYLE}"
+        url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(full)
+               + f"?width=1080&height=1920&nologo=true&seed={random.randint(1, 99999)}")
+        dst = WORK / f"ai_{_clip_seq}.jpg"
+        _clip_seq += 1
+        try:
+            r = requests.get(url, timeout=AI_IMAGE_TIMEOUT)
+            if r.status_code == 200 and "image" in r.headers.get("content-type", ""):
+                dst.write_bytes(r.content)
+                out.append(dst)
+        except Exception:
+            pass
+    print(f"[visuels] [hook IA] {len(out)}/{min(n, len(prompts))} images generees")
+    return out
+
+
+def fetch_clips(keywords: list[str], n: int = 4, label: str = "") -> list[Path]:
+    """Telecharge n clips verticaux Pexels. Prend au plus 2 clips par mot-cle pour
+    que le resultat colle a TOUS les termes demandes (et pas seulement au premier)."""
+    global _clip_seq
     key = os.getenv("PEXELS_API_KEY")
     if not key:
         print("[visuels] pas de PEXELS_API_KEY -> fond noir")
         return []
-    clips = []
+    clips, used = [], []
+    per_kw = max(1, n // max(1, len(keywords)))
     for kw in keywords:
         if len(clips) >= n:
             break
-        r = requests.get(
-            "https://api.pexels.com/videos/search",
-            headers={"Authorization": key},
-            params={"query": kw, "orientation": "portrait", "per_page": 5, "size": "large"},
-            timeout=30,
-        )
-        for vid in r.json().get("videos", []):
+        got = 0
+        try:
+            r = requests.get(
+                "https://api.pexels.com/videos/search",
+                headers={"Authorization": key},
+                params={"query": kw, "orientation": "portrait", "per_page": 5, "size": "large"},
+                timeout=30,
+            )
+            vids = r.json().get("videos", [])
+        except Exception:
+            vids = []
+        for vid in vids:
+            if got >= per_kw or len(clips) >= n:
+                break
             files = vid["video_files"]
             hd = [f for f in files if f.get("height", 0) >= 1920]
             # au moins 1920px de haut si dispo (net apres crop), sinon le plus grand
             best = min(hd, key=lambda f: f["height"]) if hd else max(files, key=lambda f: f.get("height", 0))
-            dst = WORK / f"clip_{len(clips)}.mp4"
-            with requests.get(best["link"], stream=True, timeout=60) as s:
-                with open(dst, "wb") as f:
-                    for c in s.iter_content(1 << 16):
-                        f.write(c)
+            dst = WORK / f"clip_{_clip_seq}.mp4"
+            _clip_seq += 1
+            try:
+                with requests.get(best["link"], stream=True, timeout=60) as s:
+                    with open(dst, "wb") as f:
+                        for c in s.iter_content(1 << 16):
+                            f.write(c)
+            except Exception:
+                continue
             clips.append(dst)
-            if len(clips) >= n:
-                break
-    print(f"[visuels] {len(clips)} clips telecharges")
+            used.append(kw)
+            got += 1
+    tag = f" [{label}]" if label else ""
+    print(f"[visuels]{tag} {len(clips)} clips : {', '.join(dict.fromkeys(used)) or 'aucun'}")
     return clips
 
 
@@ -510,21 +646,85 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
         # Jump cuts toutes les CUT_MIN..CUT_MAX secondes (guide hook : 1 coupe / 2-4 s).
         # On cycle sur les clips avec des offsets differents -> pas de repetition visible.
         bw, bh = int(W * 1.25), int(H * 1.25)     # source plus grande pour zoomer sans perte
-        durations = [_duration(c) for c in clips]
+        # une image IA n'a pas de duree : on la traitera en boucle sur la duree du plan
+        is_img = [c.suffix.lower() in (".jpg", ".jpeg", ".png") for c in clips]
+        durations = [(999.0 if im else _duration(c)) for c, im in zip(clips, is_img)]
         parts, i, elapsed = [], 0, 0.0
         while elapsed < total + 0.6:
-            c, src_dur = clips[i % len(clips)], durations[i % len(clips)]
-            cut = random.uniform(CUT_MIN, CUT_MAX)
+            idx = i % len(clips)
+            c, src_dur, img = clips[idx], durations[idx], is_img[idx]
+            in_hook = elapsed < HOOK_WINDOW        # zone d'accroche : traitement a part
+            cut = (random.uniform(HOOK_CUT_MIN, HOOK_CUT_MAX) if in_hook
+                   else random.uniform(CUT_MIN, CUT_MAX))
             lap = i // len(clips)                  # tour de boucle -> decale la portion utilisee
             start = min(max(0.0, src_dur - cut - 0.1), lap * cut * 1.7)
             p = WORK / f"seg_{i}.mp4"
-            # Ken Burns : zoom avant / arriere en alternance
-            z = "min(1+0.0016*on,1.25)" if i % 2 == 0 else "max(1.25-0.0016*on,1.0)"
-            vf = (f"scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
-                  f"zoompan=z='{z}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-                  f"s={W}x{H}:fps=30,setsar=1")
+
+            px, py = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
+            # Les images IA font 576x1024 en natif : on limite fortement le zoom sinon
+            # l'agrandissement cumule (upscale x zoom) pixellise l'image.
+            pf = AI_PUNCH_FROM if img else HOOK_PUNCH_FROM
+            zmax = 1.16 if img else 1.30
+            if i == 0 and HOOK_PUNCH:
+                # SNAP ZOOM d'ouverture : zoom brutal qui se resorbe en ~0.35s
+                # (les zooms rapides surpassent les plans statiques d'un facteur 2.5)
+                z = f"max({pf}-{(pf - 1.0) / 10.5:.4f}*on,1.02)"
+                if HOOK_SHAKE:       # secousse amortie, calee sur le boom d'ouverture
+                    amp = 10 if img else 18
+                    px += f"+{amp}*sin(on/1.6)*exp(-on/9)"
+                    py += f"+{int(amp * 0.78)}*cos(on/1.3)*exp(-on/9)"
+            elif in_hook:
+                # chaque plan du hook a son propre punch (alterne avant/arriere)
+                sp = 0.006 if img else 0.011
+                z = (f"max({zmax}-{sp}*on,1.02)" if i % 2 == 0
+                     else f"min(1.02+{sp}*on,{zmax})")
+            else:
+                # corps : Ken Burns lent
+                z = "min(1+0.0016*on,1.25)" if i % 2 == 0 else "max(1.25-0.0016*on,1.0)"
+
+            grade = f",{HOOK_GRADE}" if in_hook else ""   # image plus contrastee sur le hook
+            # flash blanc tres bref a chaque coupe du hook (sauf la 1re) = impact visuel
+            flash = (",fade=t=in:st=0:d=0.05:color=white"
+                     if (in_hook and HOOK_FLASH and i > 0) else "")
+
+            vfx = ""
+            if in_hook and VFX_DUTCH and i % 2 == 1:
+                # DUTCH ANGLE : plan incline (instabilite). L'ordre est critique :
+                # on AGRANDIT d'abord, on tourne ensuite, puis on recadre au centre.
+                # (tourner avant d'agrandir laisse les coins vides dans le cadre)
+                ang = VFX_DUTCH_DEG * (1 if (i // 2) % 2 == 0 else -1)
+                # facteur exact pour qu'aucun coin vide n'entre dans le cadre :
+                #   k = cos(a) + sin(a) * (H/W)   (+3% de securite)
+                _r = math.radians(abs(VFX_DUTCH_DEG))
+                k = (math.cos(_r) + math.sin(_r) * (H / W)) * 1.03
+                vfx += (f",scale={int(W * k)}:{int(H * k)},"
+                        f"rotate={ang}*PI/180,crop={W}:{H}")
+            if in_hook and VFX_VIGNETTE:
+                vfx += ",vignette=angle=PI/5"          # assombrit les bords -> oeil au centre
+            if i == 0 and VFX_GLITCH:
+                # ABERRATION CHROMATIQUE : canaux R/B ecartes puis recolles par paliers
+                # (rgbashift n'accepte pas d'expression -> on empile des fenetres temporelles,
+                #  ce qui donne un rendu saccade typique du glitch numerique)
+                a = VFX_GLITCH_AMP
+                for lo, hi, amp in ((0.00, 0.10, a), (0.10, 0.20, int(a * 0.55)),
+                                    (0.20, 0.32, int(a * 0.25))):
+                    vfx += (f",rgbashift=rh=-{amp}:bh={amp}:gv={max(1, amp // 3)}"
+                            f":enable='between(t,{lo},{hi})'")
+
+            # Image IA basse def : upscale lanczos + faible sur-echantillonnage.
+            # Video stock : marge plus large pour les mouvements de camera.
+            sw, sh = (int(W * 1.10), int(H * 1.10)) if img else (bw, bh)
+            flags = ":flags=lanczos" if img else ""
+            sharpen = ",unsharp=3:3:0.55" if img else ""
+            vf = (f"scale={sw}:{sh}:force_original_aspect_ratio=increase{flags},"
+                  f"crop={sw}:{sh}{sharpen},"
+                  f"zoompan=z='{z}':d=1:x='{px}':y='{py}':"
+                  f"s={W}x{H}:fps=30{grade}{vfx}{flash},setsar=1")
+            # image fixe -> -loop 1 (animee par le zoompan) ; video -> on coupe a `start`
+            src_args = (["-loop", "1", "-i", str(c)] if img
+                        else ["-ss", f"{start:.2f}", "-i", str(c)])
             subprocess.run(
-                ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(c), "-t", f"{cut:.2f}",
+                ["ffmpeg", "-y", *src_args, "-t", f"{cut:.2f}",
                  "-vf", vf, "-an", "-r", "30",
                  "-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p",
                  str(p)],
@@ -552,9 +752,10 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
     else:
         vid_in = ["-f", "lavfi", "-t", f"{total:.2f}", "-i", f"color=c=black:s={W}x{H}:r=30"]
 
-    # --- Chaine video : sous-titres + fondu (ouverture tres courte pour ne pas perdre le viewer)
+    # --- Chaine video : sous-titres + fondu de SORTIE seulement.
+    # Aucun fondu d'ouverture : l'image doit etre pleine des la frame 1 (hook visuel).
     vchain = (f"[0:v]subtitles='{ass_esc}':fontsdir=fonts,"
-              f"fade=t=in:st=0:d=0.2,fade=t=out:st={total - 0.6:.2f}:d=0.6[v]")
+              f"fade=t=out:st={total - 0.6:.2f}:d=0.6[v]")
 
     # --- Chaine audio : voix decalee + compressee/boostee (elle claque) + musique
     inputs = ["-i", str(audio)]                       # input 1 = voix
@@ -568,7 +769,9 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
             voc + ",asplit=2[voc][vocsc];"
             f"[2:a]aformat=sample_rates=44100:channel_layouts=stereo,"
             f"atrim=0:{total:.2f},volume={MUSIC_VOL},"
-            f"afade=t=in:st=0:d=1.2,afade=t=out:st={total - 1.6:.2f}:d=1.6[mus0];"
+            # CUT TOTAL de la musique a 1.5s pendant 0.2s : vide auditif percutant
+            f"volume='if(between(t,{SFX_CUT_AT},{SFX_CUT_AT + SFX_CUT_DUR}),0,1)':eval=frame,"
+            f"afade=t=in:st=0:d=0.8,afade=t=out:st={total - 1.6:.2f}:d=1.6[mus0];"
             # ducking : la musique baisse quand la voix parle
             f"[mus0][vocsc]sidechaincompress=threshold=0.03:ratio=8:attack=5:release=280[mus];"
             f"[voc][mus]amix=inputs=2:duration=first:normalize=0[mixed]"
@@ -579,11 +782,23 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float)
         print("[musique] aucune (depose un .mp3 dans music/)")
 
     if SFX_HOOK:
-        # "boom" cinematique synthetise (sinus descendant + decroissance) sur le hook -> pattern interrupt
+        # Timeline sound design du hook (guide) :
+        #   0.0s  sub boom 30-60Hz  -> reveil physique par le haut-parleur
+        #   0.5s  whoosh            -> accompagne le snap zoom
+        #   1.7s  riser             -> montee d'urgence apres le vide auditif
+        wh_ms = int(SFX_WHOOSH_AT * 1000)
+        ri_ms = int(SFX_RISER_AT * 1000)
         achain += (
-            ";aevalsrc='0.75*exp(-4.5*t)*sin(2*PI*(150*t-95*t*t))':d=0.9:s=44100:c=stereo,"
-            f"adelay={lead_ms}|{lead_ms},apad,atrim=0:{total:.2f}[sfx];"
-            "[mixed][sfx]amix=inputs=2:duration=first:normalize=0[aout]"
+            ";aevalsrc='0.8*exp(-4.5*t)*sin(2*PI*(150*t-95*t*t))':d=0.9:s=44100:c=stereo,"
+            f"apad,atrim=0:{total:.2f}[boom];"
+            # whoosh : bruit rose filtre, monte puis retombe
+            "anoisesrc=d=0.5:c=pink:a=0.5:s=44100,aformat=channel_layouts=stereo,"
+            "highpass=f=700,lowpass=f=7000,afade=t=in:d=0.25,afade=t=out:st=0.25:d=0.25,"
+            f"adelay={wh_ms}|{wh_ms},apad,atrim=0:{total:.2f}[whoosh];"
+            # riser : frequence qui monte = compte a rebours / urgence
+            "aevalsrc='0.22*(t/1.2)*sin(2*PI*(260+520*t*t)*t)':d=1.2:s=44100:c=stereo,"
+            f"adelay={ri_ms}|{ri_ms},apad,atrim=0:{total:.2f}[riser];"
+            "[mixed][boom][whoosh][riser]amix=inputs=4:duration=first:normalize=0[aout]"
         )
     else:
         achain += ";[mixed]anull[aout]"
@@ -620,7 +835,14 @@ def main():
         words = None
     ass = WORK / "subs.ass"
     build_subtitles(timeline, words, total, ass, emphasis=script.get("emphasis"), offset=LEAD)
-    clips = fetch_clips(script.get("keywords", [topic]), n=8)
+    # Le hook doit etre ILLUSTRE par ce qu'il raconte : on cherche d'abord des clips
+    # colles au texte du hook, ils occuperont les tout premiers plans.
+    hook_kw = [k for k in script.get("hook_keywords", []) if k]
+    hook_clips = fetch_ai_images(hook_kw, n=AI_IMAGE_COUNT) if hook_kw else []
+    if len(hook_clips) < 2 and hook_kw:          # repli si Pollinations ne repond pas
+        hook_clips += fetch_clips(hook_kw, n=3, label="hook stock")
+    body_clips = fetch_clips(script.get("keywords", [topic]), n=6, label="corps")
+    clips = hook_clips + body_clips or hook_clips or body_clips
 
     out = OUT_DIR / "short.mp4"
     assemble(audio, ass, clips, out, total)
