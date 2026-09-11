@@ -86,8 +86,13 @@ KOKORO_SPEED = {"hook": 1.22, "tension": 1.0, "body": 1.0, "revelation": 0.92, "
 # Moteur voix : "kokoro" | "google" | "edge" (via .env TTS_ENGINE ; defaut edge)
 TTS_ENGINE = os.getenv("TTS_ENGINE", "edge").lower()
 # Modeles Gemini essayes dans l'ordre (quota gratuit = 20 requetes/jour PAR modele)
-GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.0-flash", "gemini-flash-lite-latest",
-                 "gemini-2.0-flash-lite"]
+# Le plus capable en tete : la qualite editoriale se joue entierement ici.
+# Chaque modele a son PROPRE quota gratuit (20 req/jour), donc allonger la liste
+# augmente mecaniquement le nombre de videos possibles par jour.
+# Verifie le 11/09/2026 : gemini-2.0-flash et 2.0-flash-lite renvoient 404 (retires).
+GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                 "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-flash-latest",
+                 "gemini-3.5-flash-lite", "gemini-flash-lite-latest"]
 PAUSE_BEFORE_REVELATION = 0.32       # micro-pause dramatique avant la revelation finale
 PAUSE_BEFORE_TENSION = 0.26          # pause avant le TWIST (moment ou on nomme le sujet)
 W, H = 1080, 1920                    # format vertical Short
