@@ -20,10 +20,18 @@ from pathlib import Path
 
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.exceptions import RefreshError
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# youtube.upload      : publier une video
+# yt-analytics.readonly : LIRE nos propres courbes de retention (indispensable pour
+#                         savoir a quelle seconde les gens decrochent)
+# youtube.readonly      : lister nos videos et leurs identifiants
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
+          "https://www.googleapis.com/auth/yt-analytics.readonly",
+          "https://www.googleapis.com/auth/youtube.readonly"]
 TOKEN = Path("token.json")
 CLIENT = Path("client_secret.json")
 
@@ -38,16 +46,43 @@ def _write_from_env():
 
 def auth_flow():
     flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT), SCOPES)
-    creds = flow.run_local_server(port=0)
+    # prompt=consent force Google a redonner un refresh_token meme si on a deja
+    # autorise l'app ; sans ca une re-autorisation peut renvoyer un token sans refresh.
+    creds = flow.run_local_server(port=0, prompt="consent")
     TOKEN.write_text(creds.to_json())
-    print("token.json cree. Copie son contenu dans le secret GitHub YT_TOKEN.")
+    print("token.json cree.")
+
+
+def load_creds():
+    """Charge le jeton et le rafraichit. Message clair si l'autorisation est morte
+    (mode Test = refresh_token revoque tous les 7 jours) ou si les permissions
+    ont change depuis la derniere autorisation."""
+    _write_from_env()
+    if not TOKEN.exists():
+        sys.exit("token.json absent -> lance : python upload.py --auth")
+    data = json.loads(TOKEN.read_text())
+    manquantes = set(SCOPES) - set(data.get("scopes", []))
+    if manquantes:
+        sys.exit("Permissions manquantes dans token.json :\n  "
+                 + "\n  ".join(sorted(manquantes))
+                 + "\n-> relance : python upload.py --auth")
+    creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES)
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            TOKEN.write_text(creds.to_json())
+        except RefreshError:
+            sys.exit("Autorisation expiree (invalid_grant).\n"
+                     "Cause habituelle : l'app OAuth est restee en mode Test, le\n"
+                     "refresh_token y meurt au bout de 7 jours. Passe l'app en\n"
+                     "PRODUCTION dans Google Cloud Console, puis :\n"
+                     "  python upload.py --auth")
+    return creds
 
 
 def upload(base="output"):
     """Uploade base/short.mp4 avec base/meta.json (base = 'output' ou un dossier galerie)."""
-    _write_from_env()
-    creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES)
-    yt = build("youtube", "v3", credentials=creds)
+    yt = build("youtube", "v3", credentials=load_creds())
 
     base = Path(base)
     meta = json.loads((base / "meta.json").read_text(encoding="utf-8"))

@@ -163,6 +163,14 @@ def main() -> int:
         import upload
         upload.upload(str(folder))
         log("PUBLIE OK")
+    except SystemExit as e:
+        # upload.load_creds() s'arrete par sys.exit quand l'autorisation est morte.
+        # SystemExit n'herite PAS de Exception : sans ce bloc, le script mourait
+        # SANS alerte -- c'est exactement ce qui a fait taire la chaine 24 jours.
+        log(f"ARRET AUTH : {e}")
+        notify(f"🔴 Attends Quoi : publication bloquee, autorisation a refaire.\n{e}",
+               a.notify)
+        return 2
     except Exception as e:
         log(f"ECHEC upload : {type(e).__name__} {e}")
         notify(f"⚠️ Attends Quoi : echec de publication\n{type(e).__name__} : {e}", a.notify)
