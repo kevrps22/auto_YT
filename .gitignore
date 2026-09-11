@@ -14,3 +14,16 @@ token.json
 __pycache__/
 *.pyc
 .venv/
+
+# --- studio personnage ---
+work_char/
+characters/
+
+# --- journaux d'execution ---
+*.log
+batch.err
+
+# --- artefacts de test / modeles telechargeables ---
+voices/
+sample_*.wav
+_test_*.py

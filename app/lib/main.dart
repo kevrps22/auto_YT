@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
+import 'character_tab.dart';
+
 void main() => runApp(const YtStudioApp());
 
 // ------------------------------------------------------------------ config
@@ -153,6 +155,7 @@ class _HomeState extends State<Home> {
             ),
             destinations: const [
               NavigationRailDestination(icon: Icon(Icons.movie_creation_outlined), label: Text('Generer')),
+              NavigationRailDestination(icon: Icon(Icons.face_retouching_natural), label: Text('Perso')),
               NavigationRailDestination(icon: Icon(Icons.cloud_upload_outlined), label: Text('Upload')),
               NavigationRailDestination(icon: Icon(Icons.insights_outlined), label: Text('Stats')),
             ],
@@ -161,7 +164,7 @@ class _HomeState extends State<Home> {
           Expanded(
             child: IndexedStack(
               index: _i,
-              children: const [GenerateTab(), UploadTab(), StatsTab()],
+              children: const [GenerateTab(), CharacterTab(), UploadTab(), StatsTab()],
             ),
           ),
         ],
