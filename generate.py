@@ -106,6 +106,14 @@ CUT_MIN, CUT_MAX = 1.5, 2.1          # duree d'un plan (guide : nouvelle ancre v
 # --- Hook VISUEL : 60% des vues sont sans son -> l'image doit accrocher seule.
 HOOK_WINDOW = 3.2                    # duree de la zone "hook" traitee a part
 HOOK_CUT_MIN, HOOK_CUT_MAX = 0.45, 0.7  # coupes tres rapides = pattern interrupt permanent
+# --- Sortie de hook PROGRESSIVE (mesure Analytics du 12/09/2026) ---
+# 21 videos sur 25 avaient leur plus forte chute d'audience entre 4.4 et 5.3 s,
+# soit le premier plan lent apres la fin du hook. Le montage passait d'un coup
+# de 0.45 s a 1.5 s par plan, et l'etalonnage, les flashs, l'inclinaison et le
+# vignettage s'arretaient tous au meme instant : l'energie s'effondrait d'un
+# bloc a 3.2 s et le spectateur partait dans la seconde qui suivait.
+# On etale desormais ce retour au calme jusqu'a DECAY_UNTIL.
+DECAY_UNTIL = 9.0                    # fin de la transition hook -> corps
 HOOK_PUNCH = True                    # snap zoom sur CHAQUE plan du hook
 HOOK_PUNCH_FROM = 1.55               # zoom de depart du punch d'ouverture
 HOOK_SHAKE = True                    # secousse camera sur le 1er plan (synchro avec le boom)
@@ -1068,6 +1076,20 @@ Format: Layer, Start, End, Style, Text
 _clip_seq = 0
 
 
+# Pollinations incruste "pollinations.ai" en bas a droite. Le parametre nologo=true
+# de l'API ne le retire plus. Rogner le bas est la seule option : un filigrane
+# visible signale une video automatisee au premier coup d'oeil.
+AI_WATERMARK_CROP = 0.06             # part basse de l'image a supprimer
+
+
+def _strip_watermark(path: Path) -> None:
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            w, h = im.size
+            im.crop((0, 0, w, int(h * (1 - AI_WATERMARK_CROP)))).save(path, quality=95)
+    except Exception:
+        pass                          # une image non rognee vaut mieux que pas d'image
 def fetch_ai_images(prompts: list[str], n: int = 3) -> list[Path]:
     """Genere des images IA (Pollinations : gratuit, sans cle) pour illustrer le hook.
     Le stock footage generique 'hurle PUB' au cerveau ; une image sur mesure, non.
@@ -1088,6 +1110,7 @@ def fetch_ai_images(prompts: list[str], n: int = 3) -> list[Path]:
             r = requests.get(url, timeout=AI_IMAGE_TIMEOUT)
             if r.status_code == 200 and "image" in r.headers.get("content-type", ""):
                 dst.write_bytes(r.content)
+                _strip_watermark(dst)
                 out.append(dst)
             elif not why:
                 why = ("credits epuises (Pollinations est devenu payant)"
@@ -1206,6 +1229,10 @@ VISUAL_QA_MIN_CONTRAST = 28
 
 def _words(value) -> tuple[str, ...]:
     """Mots anglais normalises pour les contrats visuels et les slugs de banques."""
+    if value is None:
+        # str(None) donnait "none", un mot que le filtre exigeait ensuite dans
+        # chaque slug : tous les clips du corps etaient rejetes (require=None).
+        return ()
     if isinstance(value, (list, tuple, set)):
         value = " ".join(str(v) for v in value)
     return tuple(w for w in re.findall(r"[a-z0-9]+", str(value).lower()) if len(w) > 2)
@@ -1224,11 +1251,11 @@ def _normalise_visual_plan(raw) -> dict:
     required = list(_words(raw.get("must_include", [])))
     if not required and subject:
         required = list(_words(subject))
-    # Compatibilite : une ancienne requete reste ancree sur son nom distinctif.
-    if not required and query:
-        noun = _key_noun(query)
-        if noun:
-            required = [noun]
+    # Une requete en TEXTE SIMPLE ne se voit imposer aucune ancre dure : _key_noun
+    # choisit le mot le plus rare, souvent un adjectif ("bee wings vibrating flower"
+    # -> "vibrating"), qu'aucun clip ne porte. La pertinence de ces requetes est
+    # deja assuree plus bas par key_tok (phase 0, relache en phase 1).
+    # Seul le contrat structure de Gemini fixe des ancres non negociables.
     forbidden = list(_words(raw.get("must_not_include", [])))
     look = list(_words(raw.get("look", [])))
     shot = str(raw.get("shot") or "").lower().strip()
@@ -1427,7 +1454,8 @@ def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
                 strict: bool = False,
                 negative: tuple[str, ...] = (),
                 allow: tuple[str, ...] = (),
-                dedup: bool = True) -> list[Path]:
+                dedup: bool = True,
+                species: frozenset[str] = frozenset()) -> list[Path]:
     """Telecharge n clips verticaux Pexels, filtres sur le slug de leur URL.
 
     require        : mot OBLIGATOIRE dans le slug (frame 0 et revelation)
@@ -1437,6 +1465,9 @@ def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
     allow          : bans globaux a LEVER car ils decrivent le sujet meme
                      (un short sur les aquariums a le droit de montrer un aquarium)
     dedup          : interdit deux clips partageant les 3 premiers mots de slug
+    species        : espece(s) du SUJET de la video. Sans elle, une requete de
+                     scene qui ne nomme pas l'animal ("pollen macro") faisait
+                     rejeter tous les clips du sujet comme "autre espece".
     """
     # un ban global ne s'applique pas s'il decrit precisement le sujet de la video
     bans = tuple(b for b in BANNED_VISUALS
@@ -1491,9 +1522,9 @@ def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
         key_tok = _key_noun(kw)          # mot le plus distinctif de la requete
         must_tokens = set(plan["must_include"])
         forbidden_tokens = set(plan["must_not_include"])
-        require_tokens = set(_words(require))
+        require_tokens = set(_words(require)) if require else set()
         # espece(s) citee(s) par la requete : toute AUTRE espece est un hors-sujet
-        q_species = ANIMAL_SPECIES & kw_words
+        q_species = (ANIMAL_SPECIES & kw_words) | species
         # phase 0 : pertinence + scenes inedites. phase 1 : on relache la seule
         # exigence d'inedit (la pertinence, elle, reste imposee en mode strict) —
         # sinon une banque pauvre en scenes variees nous laisse sans image du tout.
@@ -1712,8 +1743,14 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float,
                 idx = pool.pop()
             c, src_dur, img = clips[idx], durations[idx], is_img[idx]
             in_hook = elapsed < HOOK_WINDOW        # zone d'accroche : traitement a part
-            cut = (random.uniform(HOOK_CUT_MIN, HOOK_CUT_MAX) if in_hook
-                   else random.uniform(CUT_MIN, CUT_MAX))
+            # ramp : 0 pendant le hook, 1 une fois le regime de croisiere atteint.
+            # Tout ce qui distingue le hook du corps s'interpole sur cette valeur,
+            # pour qu'aucun parametre ne bascule d'un seul coup (cf. DECAY_UNTIL).
+            ramp = 0.0 if in_hook else min(1.0, (elapsed - HOOK_WINDOW)
+                                           / max(0.1, DECAY_UNTIL - HOOK_WINDOW))
+            lo = HOOK_CUT_MIN + (CUT_MIN - HOOK_CUT_MIN) * ramp
+            hi = HOOK_CUT_MAX + (CUT_MAX - HOOK_CUT_MAX) * ramp
+            cut = random.uniform(lo, hi)
             if on_reveal:
                 # la revelation reste a l'ecran tant que la voix la prononce
                 cut = max(cut, min(reveal_dur, src_dur - 0.1) if not img else reveal_dur)
@@ -1726,7 +1763,7 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float,
             else:
                 # coupe calee sur une fin de phrase / de mot : on ne coupe plus au
                 # milieu d'un mot-cle. (Le hook garde son rythme haché volontaire.)
-                if not in_hook and (cuts_strong or cuts_soft):
+                if ramp > 0.45 and (cuts_strong or cuts_soft):
                     snapped = _snap(elapsed + cut, cuts_strong, cuts_soft) - elapsed
                     if CUT_MIN * 0.6 <= snapped <= CUT_MAX * 1.6:
                         cut = snapped
@@ -1749,34 +1786,37 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float,
                     amp = 10 if img else 18
                     px += f"+{amp}*sin(on/1.6)*exp(-on/9)"
                     py += f"+{int(amp * 0.78)}*cos(on/1.3)*exp(-on/9)"
-            elif in_hook:
-                # chaque plan du hook a son propre punch (alterne avant/arriere)
-                sp = 0.006 if img else 0.011
-                z = (f"max({zmax}-{sp}*on,1.02)" if i % 2 == 0
-                     else f"min(1.02+{sp}*on,{zmax})")
             else:
-                # corps : Ken Burns lent
-                z = "min(1+0.0016*on,1.25)" if i % 2 == 0 else "max(1.25-0.0016*on,1.0)"
+                # Vitesse de zoom interpolee : punch du hook -> Ken Burns lent du
+                # corps. Sans interpolation, le mouvement chutait d'un facteur 7
+                # au meme instant que les coupes et que l'etalonnage.
+                sp_hook = 0.006 if img else 0.011
+                sp = sp_hook + (0.0016 - sp_hook) * ramp
+                zm = zmax + (1.25 - zmax) * ramp
+                z = (f"max({zm:.3f}-{sp:.5f}*on,1.02)" if i % 2 == 0
+                     else f"min(1.02+{sp:.5f}*on,{zm:.3f})")
 
-            # palette commune a tous les plans (continuite) + surcouche punchy sur le hook
-            grade = f",{HOOK_GRADE},{PALETTE}" if in_hook else f",{PALETTE}"
-            # flash blanc tres bref a chaque coupe du hook (sauf la 1re) = impact visuel
-            flash = (",fade=t=in:st=0:d=0.05:color=white"
-                     if (in_hook and HOOK_FLASH and i > 0) else "")
+            # palette commune a tous les plans (continuite). L'etalonnage punchy du
+            # hook ne s'arrete plus net : il tient toute la premiere moitie de la
+            # transition, sinon la couleur change a vue d'oeil en pleine phrase.
+            grade = (f",{HOOK_GRADE},{PALETTE}" if ramp < 0.55 else f",{PALETTE}")
+            # flash blanc a chaque coupe : il s'affine puis disparait avec la rampe
+            flash = (f",fade=t=in:st=0:d={0.05 * (1 - ramp) + 0.01:.3f}:color=white"
+                     if (HOOK_FLASH and i > 0 and ramp < 0.75) else "")
 
             vfx = ""
-            if in_hook and VFX_DUTCH and i % 2 == 1:
+            if VFX_DUTCH and ramp < 0.8 and i % 2 == 1:
                 # DUTCH ANGLE : plan incline (instabilite). L'ordre est critique :
                 # on AGRANDIT d'abord, on tourne ensuite, puis on recadre au centre.
                 # (tourner avant d'agrandir laisse les coins vides dans le cadre)
-                ang = VFX_DUTCH_DEG * (1 if (i // 2) % 2 == 0 else -1)
+                ang = VFX_DUTCH_DEG * (1 - ramp) * (1 if (i // 2) % 2 == 0 else -1)
                 # facteur exact pour qu'aucun coin vide n'entre dans le cadre :
                 #   k = cos(a) + sin(a) * (H/W)   (+3% de securite)
-                _r = math.radians(abs(VFX_DUTCH_DEG))
+                _r = math.radians(abs(ang))
                 k = (math.cos(_r) + math.sin(_r) * (H / W)) * 1.03
                 vfx += (f",scale={int(W * k)}:{int(H * k)},"
                         f"rotate={ang}*PI/180,crop={W}:{H}")
-            if in_hook and VFX_VIGNETTE:
+            if VFX_VIGNETTE and ramp < 1.0:
                 vfx += ",vignette=angle=PI/5"          # assombrit les bords -> oeil au centre
             if i == 0 and VFX_GLITCH:
                 # ABERRATION CHROMATIQUE : canaux R/B ecartes puis recolles par paliers
@@ -2043,7 +2083,8 @@ def main():
         hook_clips += first
         hook_clips += fetch_clips(stock_plans, n=3 - len(first), label="hook stock",
                                   banned_tokens=extra_ban, strict=strict,
-                                  negative=negative, allow=allow)
+                                  negative=negative, allow=allow,
+                                  species=subject_species)
     # Le corps suit le plan structure dans l'ordre du recit, pas des mots isoles.
     if script.get("historical"):
         body_plans = _filter_visual_plans(body_plans, _anchor_queries)
@@ -2058,7 +2099,8 @@ def main():
                                                 "shot": "detail",
                                                 "look": ["cinematic", "dark", "high_detail"]})]
     body_clips = fetch_clips(body_plans, n=12, label="corps", banned_tokens=extra_ban,
-                             strict=strict, negative=negative, allow=allow)
+                             strict=strict, negative=negative, allow=allow,
+                             species=subject_species)
     clips = hook_clips + body_clips or hook_clips or body_clips
     # le clip de frame 0 est en tete de liste : assemble() l'epingle a t=0
     pinned_first = bool(first)
@@ -2077,10 +2119,12 @@ def main():
         # 1er essai : on EXIGE que le sujet soit dans le clip (sinon Pexels renvoie
         # un recif quelconque pour 'great white shark'). Sinon on relache la contrainte.
         got = fetch_clips([reveal_plan], n=1, label="revelation", require=noun,
-                          banned_tokens=extra_ban, negative=negative, dedup=False)
+                          banned_tokens=extra_ban, negative=negative, dedup=False,
+                          species=subject_species)
         if not got and noun:
             got = fetch_clips([noun], n=1, label="revelation (repli)", require=noun,
-                              banned_tokens=extra_ban, negative=negative, dedup=False)
+                              banned_tokens=extra_ban, negative=negative, dedup=False,
+                              species=subject_species)
         if not got:
             got = fetch_clips([rk], n=1, label="revelation (large)",
                               banned_tokens=extra_ban, dedup=False)

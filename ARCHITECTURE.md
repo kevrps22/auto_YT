@@ -316,3 +316,61 @@ tous les 7 jours et l'automatisation meurt en silence.
 
 **Règle de survie** : toujours lancer les scripts avec `.venv/Scripts/python.exe`.
 Le `python` du système est un exécutable de 0 octet et échoue **silencieusement**.
+
+---
+
+## 11. Mesures Analytics — 12 septembre 2026
+
+`analytics.py` lit enfin les vraies courbes (permission `yt-analytics.readonly`).
+Jusqu'a cette date le projet publiait sans jamais savoir ou les gens partaient.
+
+```
+python analytics.py            tableau de toutes les videos, triees par APV
+python analytics.py --hook     retention moyenne seconde par seconde
+python analytics.py "fort knox"  courbe detaillee d'une video
+```
+
+### Ce que les donnees disent
+
+**Le hook n'est PAS le probleme.** La retention au debut depasse 100 % (128 % a
+0,3 s) : les spectateurs revoient l'ouverture. C'est le corps qui perd tout le
+monde, avec une erosion continue jusqu'a 32 % en fin de video. APV median 58 %.
+
+**Une falaise a 4,8 s.** 21 videos sur 25 avaient leur plus forte chute entre
+4,4 et 5,3 s. Cause trouvee dans le montage : a `HOOK_WINDOW` (3,2 s) les plans
+passaient d'un coup de 0,45 s a 1,5 s pendant que l'etalonnage, les flashs,
+l'inclinaison et le vignettage s'arretaient tous au meme instant. Corrige par
+une rampe `DECAY_UNTIL` : tout s'interpole desormais jusqu'a 9 s.
+
+**La distribution, pas le contenu, explique aout.** Hors vacances la mediane est
+de 1470 vues, pendant les vacances de 366. Les 12 videos basses sont toutes
+publiees a 14h00 pile : televersees en lot puis programmees. Preuve que le
+contenu n'est pas en cause : « L'homme frappe 7 fois par la foudre » affiche le
+MEILLEUR taux de like de la chaine (2,6 %) et un APV de 104 %, pour 307 vues.
+**Ne jamais reprendre le televersement en lot.**
+
+### Bugs majeurs corriges le meme jour
+
+1. `_words(None)` renvoyait `('none',)`. Le filtre exigeait ensuite ce mot dans
+   chaque slug, donc **100 % des clips du corps etaient rejetes** dans toutes les
+   videos. Elles tournaient sur 3-4 images repetees — ce qui explique tres
+   probablement l'erosion mesuree ci-dessus.
+2. `_normalise_visual_plan` imposait `_key_noun` comme ancre dure sur les
+   requetes en texte simple : « bee wings vibrating flower » exigeait
+   « vibrating » dans le clip. La pertinence est laissee a `key_tok`, qui a un
+   repli en phase 1.
+3. `fetch_clips` ignorait l'espece du SUJET : une scene ne nommant pas l'animal
+   (« pollen macro ») faisait rejeter tous les clips du sujet comme « autre
+   espece ». Parametre `species=` ajoute.
+4. Pollinations incruste un filigrane malgre `nologo=true` -> `_strip_watermark`
+   rogne les 6 % du bas.
+
+Mesure apres correctifs sur un meme sujet : corps passe de **0 clip (4 images
+repetees 4 fois)** a **8 clips pertinents, 1 seule repetition**.
+
+### OAuth
+
+L'app est passee en **Production** le 12/09/2026 (le mode Test revoquait le
+refresh_token tous les 7 jours, ce qui a fait taire la chaine 24 jours). Ecran
+de consentement adosse a https://kevrps22.github.io (depot public
+`kevrps22/kevrps22.github.io`), verifie dans Search Console.
