@@ -1460,6 +1460,29 @@ def fetch_pixabay_videos(query: str, per_page: int = 15) -> list[dict]:
     return [v for v in out if v["vertical"]]
 
 
+# Vocabulaire de cadrage : utile a Gemini pour decrire une intention, inutile —
+# voire nuisible — dans une recherche de banque d'images.
+_SHOT_WORDS = frozenset({"macro", "closeup", "close", "detail", "shot", "view",
+                         "angle", "extreme", "slow", "motion", "footage", "scene",
+                         "background", "cinematic", "dramatic", "dark", "light"})
+
+
+def _short_query(kw: str) -> str:
+    """Version courte et cherchable d'une requete.
+
+    Pexels et Pixabay font de la correspondance approximative : plus la requete
+    est longue, plus la reponse derive. Mesure du 12/09/2026 : "macro gold smart
+    card chip detail" ramenait du tissu, une machine a coudre et de la peau —
+    zero mot commun avec la requete. On garde donc les 2 derniers mots porteurs
+    (l'anglais place le nom principal en fin de groupe) et on jette le cadrage.
+    """
+    mots = [w for w in re.findall(r"[a-z]+", kw.lower())
+            if len(w) > 2 and w not in _SHOT_WORDS and w not in _GENERIC]
+    # les DEUX PREMIERS : Gemini place le sujet en tete ("ants crawling ground",
+    # "credit card tapping pos"). Garder la fin perdait justement le sujet.
+    return " ".join(mots[:2]) if len(mots) > 2 else ""
+
+
 def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
                 require: str | None = None,
                 banned_tokens: frozenset[str] = frozenset(),
@@ -1492,6 +1515,14 @@ def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
     clips, used = [], []
     src = {"pexels": 0, "pixabay": 0}
     rejected = off_topic = dup = landscape = visual_bad = 0
+    # VISUAL_DEBUG=1 -> dit pour CHAQUE clip pourquoi il est ecarte. Ce filtre est
+    # la piece la plus subtile du projet ; sans trace, chaque reglage se debogue
+    # a l'aveugle (il a deja masque quatre bugs qui vidaient le corps des videos).
+    _dbg = bool(os.getenv("VISUAL_DEBUG"))
+
+    def _drop(reason: str, text: str) -> None:
+        if _dbg:
+            print(f"    rejet {reason:26} {text[36:104]}")
     # arrondi au SUPERIEUR : on veut de quoi ne jamais repeter un plan dans la video
     per_kw = max(1, -(-n // max(1, len(keywords))))
     for raw_plan in keywords:
@@ -1503,150 +1534,166 @@ def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
         if not kw:
             continue
         got = 0
-        try:
-            r = requests.get(
-                "https://api.pexels.com/videos/search",
-                headers={"Authorization": key},
-                # on demande large : le filtre anti hors-sujet en elimine une partie
-                params={"query": kw, "orientation": "portrait", "per_page": 15, "size": "large"},
-                timeout=30,
-            )
-            vids = r.json().get("videos", [])
-        except Exception:
-            vids = []
-        # CATALOGUE HYBRIDE : Pixabay double le vivier. Pexels d'abord (100% vertical),
-        # Pixabay ensuite (verticales en tete, paysage en complement).
-        vids += fetch_pixabay_videos(kw)
-        # Les meilleurs masters verticaux arrivent avant les variantes molles ou
-        # recadrees. Cela ne pretend pas reconnaitre une image : Pexels ne fournit
-        # pas ce signal; on se limite aux metadonnees reelles de l'API.
-        vids.sort(key=lambda v: _candidate_quality(v, plan), reverse=True)
-        # Une liste noire ne suffit pas : un incendie titre "smoke-rising-over-hill"
-        # ne contient aucun mot interdit. On EXIGE donc que le clip parle du sujet
-        # demande (phase 0) ; si la banque n'a rien, on relache (phase 1).
-        # On exige qu'AU MOINS UN mot significatif de la requete soit dans le titre du
-        # clip. Exiger le seul mot principal etait trop rigide : "ancient columns forum"
-        # rejetait "ancient-roman-ruins-in-hierapolis", pourtant ideal.
-        q_tokens = {w for w in re.findall(r"[a-z]+", kw.lower())
-                    if w not in _GENERIC and len(w) > 2}
-        kw_words = set(re.findall(r"[a-z]+", kw.lower()))
-        key_tok = _key_noun(kw)          # mot le plus distinctif de la requete
-        must_tokens = set(plan["must_include"])
-        forbidden_tokens = set(plan["must_not_include"])
-        require_tokens = set(_words(require)) if require else set()
-        # espece(s) citee(s) par la requete : toute AUTRE espece est un hors-sujet
-        q_species = (ANIMAL_SPECIES & kw_words) | species
-        # phase 0 : pertinence + scenes inedites. phase 1 : on relache la seule
-        # exigence d'inedit (la pertinence, elle, reste imposee en mode strict) —
-        # sinon une banque pauvre en scenes variees nous laisse sans image du tout.
-        for phase in (0, 1):
-            if got:
+        # Une requete longue fait DERIVER la recherche des banques : mesure du
+        # 12/09/2026, "macro gold smart card chip detail" ramenait du tissu, une
+        # machine a coudre et de la peau, sans un seul mot commun. Si la requete
+        # complete ne donne rien, on retente avec sa version courte.
+        for kw_try in (kw, _short_query(kw)):
+            if got or not kw_try:
                 break
-            for vid in vids:
-                if got >= per_kw or len(clips) >= n:
+            try:
+                r = requests.get(
+                    "https://api.pexels.com/videos/search",
+                    headers={"Authorization": key},
+                    # on demande large : le filtre anti hors-sujet en elimine une partie
+                    params={"query": kw_try, "orientation": "portrait", "per_page": 15, "size": "large"},
+                    timeout=30,
+                )
+                vids = r.json().get("videos", [])
+            except Exception:
+                vids = []
+            # CATALOGUE HYBRIDE : Pixabay double le vivier. Pexels d'abord (100% vertical),
+            # Pixabay ensuite (verticales en tete, paysage en complement).
+            vids += fetch_pixabay_videos(kw_try)
+            # Les meilleurs masters verticaux arrivent avant les variantes molles ou
+            # recadrees. Cela ne pretend pas reconnaitre une image : Pexels ne fournit
+            # pas ce signal; on se limite aux metadonnees reelles de l'API.
+            vids.sort(key=lambda v: _candidate_quality(v, plan), reverse=True)
+            # Une liste noire ne suffit pas : un incendie titre "smoke-rising-over-hill"
+            # ne contient aucun mot interdit. On EXIGE donc que le clip parle du sujet
+            # demande (phase 0) ; si la banque n'a rien, on relache (phase 1).
+            # On exige qu'AU MOINS UN mot significatif de la requete soit dans le titre du
+            # clip. Exiger le seul mot principal etait trop rigide : "ancient columns forum"
+            # rejetait "ancient-roman-ruins-in-hierapolis", pourtant ideal.
+            q_tokens = {w for w in re.findall(r"[a-z]+", kw_try.lower())
+                        if w not in _GENERIC and len(w) > 2}
+            kw_words = set(re.findall(r"[a-z]+", kw_try.lower()))
+            key_tok = _key_noun(kw_try)          # mot le plus distinctif de la requete
+            must_tokens = set(plan["must_include"])
+            forbidden_tokens = set(plan["must_not_include"])
+            require_tokens = set(_words(require)) if require else set()
+            # espece(s) citee(s) par la requete : toute AUTRE espece est un hors-sujet
+            q_species = (ANIMAL_SPECIES & kw_words) | species
+            # phase 0 : pertinence + scenes inedites. phase 1 : on relache la seule
+            # exigence d'inedit (la pertinence, elle, reste imposee en mode strict) —
+            # sinon une banque pauvre en scenes variees nous laisse sans image du tout.
+            for phase in (0, 1):
+                if got:
                     break
-                # --- rejet des plans hors contexte (mannequin, massage, classe...)
-                # Pexels decrit ses clips par le slug de l'URL, Pixabay par ses tags :
-                # les deux sont fondus dans le meme texte pour un filtrage identique.
-                slug = _vid_text(vid)
-                # mot entier : "ancient-roman-ruins" ne doit pas matcher le token "man"
-                tokens = _vid_tokens(vid)
-                if any(b in slug for b in bans) or (banned_tokens & tokens):
-                    rejected += 1
-                    continue
-                # Styles graphiques / captures d'ecran : incompatibles avec le rendu
-                # organique de b-roll, quelle que soit la qualite de la resolution.
-                if STYLE_REJECTED & tokens:
-                    rejected += 1
-                    continue
-                # mots-cles negatifs propres au sujet (fournis par Gemini)
-                if negative and _negative_hit(tokens, negative):
-                    rejected += 1
-                    continue
-                if forbidden_tokens & tokens:
-                    rejected += 1
-                    continue
-                # ESPECE INCOMPATIBLE : "gorilla" ne doit pas ramener une panthere
-                other_species = (ANIMAL_SPECIES & tokens) - q_species
-                if other_species:
-                    rejected += 1
-                    continue
-                # frame 0 / revelation : le sujet doit reellement apparaitre dans le clip
-                if require_tokens and not require_tokens.issubset(tokens):
-                    rejected += 1
-                    continue
-                # Nouveau contrat : les ancres visuelles sont non negociables. Une
-                # ambiance de coffre sans porte ne peut pas illustrer "vault door".
-                if must_tokens and not must_tokens.issubset(tokens):
-                    off_topic += 1
-                    continue
-                # jamais deux fois le MEME clip, quelle que soit la phase
-                vid_id = vid.get("id")
-                if vid_id in _seen_ids:
-                    dup += 1
-                    continue
-                # Pertinence : imposee en phase 0, et en phase 1 si mode strict.
-                # Pixabay liste ~15 tags larges ("nature, blue, water, sky...") : un
-                # seul mot commun ne prouve rien (une Voie lactee passait pour de
-                # l'apnee via "blue"+"water"). On exige donc 2 recoupements quand le
-                # descriptif est long, 1 seul sur un slug Pexels concis.
-                # Phase 0 : on exige le mot DISTINCTIF de la requete. Compter 2 mots
-                # quelconques ne suffit pas — "freediver underwater rope line" laissait
-                # passer une slackline via "rope"+"line".
-                if phase == 0 and key_tok and key_tok not in tokens:
-                    off_topic += 1
-                    continue
-                # Phase 1 = VRAI repli. Auparavant plan_strict (vrai des que Gemini
-                # renvoyait des ancrages, donc presque toujours) maintenait l'exigence
-                # des deux phases : une requete un peu abstraite ne ramenait alors
-                # aucun clip et le corps de la video restait vide.
-                need = 2 if len(_vid_content_tokens(tokens)) > 10 else 1
-                if phase == 1:
-                    need = 1            # un seul mot commun suffit pour depanner
-                hits = len(q_tokens & tokens)
-                if q_tokens and hits < min(need, len(q_tokens)):
-                    off_topic += 1
-                    continue
-                    continue
-                # meme scene qu'un clip deja pris (3 angles de la meme ruine).
-                # Contrainte SOUPLE : abandonnee en phase 1 pour ne pas finir sans plan.
-                pref = _slug_prefix(slug, exclude=kw_words)
-                if phase == 0 and dedup and pref and pref in _seen_prefixes:
-                    dup += 1
-                    continue
-                # JAMAIS de format horizontal : on ne garde que les fichiers dont la
-                # hauteur depasse la largeur (le carre reste tolere).
-                files = [f for f in vid["video_files"]
-                         if f.get("height", 0) >= f.get("width", 0) > 0
-                         and f["width"] / f["height"] <= MAX_VERTICAL_ASPECT]
-                if not files:
-                    landscape += 1
-                    continue
-                hd = [f for f in files if f.get("height", 0) >= PREFERRED_VERTICAL_HEIGHT]
-                # Master 4K/2K en priorite, sinon le vertical natif le plus defini.
-                best = (max(hd, key=lambda f: f["height"]) if hd
-                        else max(files, key=lambda f: f.get("height", 0)))
-                dst = WORK / f"clip_{_clip_seq}.mp4"
-                _clip_seq += 1
-                try:
-                    with requests.get(best["link"], stream=True, timeout=60) as s:
-                        with open(dst, "wb") as f:
-                            for c in s.iter_content(1 << 16):
-                                f.write(c)
-                except Exception:
-                    continue
-                visual_ok, _visual_reason = _passes_visual_qa(dst)
-                if not visual_ok:
-                    dst.unlink(missing_ok=True)
-                    visual_bad += 1
-                    continue
-                clips.append(dst)
-                used.append(kw)
-                src[("pixabay" if str(vid_id).startswith("pixabay") else "pexels")] += 1
-                _seen_ids.add(vid_id)
-                if dedup and pref:
-                    _seen_prefixes.add(pref)
-                got += 1
+                for vid in vids:
+                    if got >= per_kw or len(clips) >= n:
+                        break
+                    # --- rejet des plans hors contexte (mannequin, massage, classe...)
+                    # Pexels decrit ses clips par le slug de l'URL, Pixabay par ses tags :
+                    # les deux sont fondus dans le meme texte pour un filtrage identique.
+                    slug = _vid_text(vid)
+                    # mot entier : "ancient-roman-ruins" ne doit pas matcher le token "man"
+                    tokens = _vid_tokens(vid)
+                    if any(b in slug for b in bans) or (banned_tokens & tokens):
+                        _drop('ban global', slug)
+                        rejected += 1
+                        continue
+                    # Styles graphiques / captures d'ecran : incompatibles avec le rendu
+                    # organique de b-roll, quelle que soit la qualite de la resolution.
+                    if STYLE_REJECTED & tokens:
+                        _drop('style graphique', slug)
+                        rejected += 1
+                        continue
+                    # mots-cles negatifs propres au sujet (fournis par Gemini)
+                    if negative and _negative_hit(tokens, negative):
+                        _drop('negatif du sujet', slug)
+                        rejected += 1
+                        continue
+                    if forbidden_tokens & tokens:
+                        _drop('interdit du plan', slug)
+                        rejected += 1
+                        continue
+                    # ESPECE INCOMPATIBLE : "gorilla" ne doit pas ramener une panthere
+                    other_species = (ANIMAL_SPECIES & tokens) - q_species
+                    if other_species:
+                        _drop(f'autre espece {sorted(other_species)}', slug)
+                        rejected += 1
+                        continue
+                    # frame 0 / revelation : le sujet doit reellement apparaitre dans le clip
+                    if require_tokens and not require_tokens.issubset(tokens):
+                        _drop('mot requis absent', slug)
+                        rejected += 1
+                        continue
+                    # Nouveau contrat : les ancres visuelles sont non negociables. Une
+                    # ambiance de coffre sans porte ne peut pas illustrer "vault door".
+                    if must_tokens and not must_tokens.issubset(tokens):
+                        _drop(f'ancre {sorted(must_tokens)}', slug)
+                        off_topic += 1
+                        continue
+                    # jamais deux fois le MEME clip, quelle que soit la phase
+                    vid_id = vid.get("id")
+                    if vid_id in _seen_ids:
+                        dup += 1
+                        continue
+                    # Pertinence : imposee en phase 0, et en phase 1 si mode strict.
+                    # Pixabay liste ~15 tags larges ("nature, blue, water, sky...") : un
+                    # seul mot commun ne prouve rien (une Voie lactee passait pour de
+                    # l'apnee via "blue"+"water"). On exige donc 2 recoupements quand le
+                    # descriptif est long, 1 seul sur un slug Pexels concis.
+                    # Phase 0 : on exige le mot DISTINCTIF de la requete. Compter 2 mots
+                    # quelconques ne suffit pas — "freediver underwater rope line" laissait
+                    # passer une slackline via "rope"+"line".
+                    if phase == 0 and key_tok and key_tok not in tokens:
+                        _drop(f'distinctif {key_tok!r}', slug)
+                        off_topic += 1
+                        continue
+                    # Phase 1 = VRAI repli. Auparavant plan_strict (vrai des que Gemini
+                    # renvoyait des ancrages, donc presque toujours) maintenait l'exigence
+                    # des deux phases : une requete un peu abstraite ne ramenait alors
+                    # aucun clip et le corps de la video restait vide.
+                    need = 2 if len(_vid_content_tokens(tokens)) > 10 else 1
+                    if phase == 1:
+                        need = 1            # un seul mot commun suffit pour depanner
+                    hits = len(q_tokens & tokens)
+                    if q_tokens and hits < min(need, len(q_tokens)):
+                        _drop(f'recoupements {hits}/{min(need, len(q_tokens))}', slug)
+                        off_topic += 1
+                        continue
+                        continue
+                    # meme scene qu'un clip deja pris (3 angles de la meme ruine).
+                    # Contrainte SOUPLE : abandonnee en phase 1 pour ne pas finir sans plan.
+                    pref = _slug_prefix(slug, exclude=kw_words)
+                    if phase == 0 and dedup and pref and pref in _seen_prefixes:
+                        dup += 1
+                        continue
+                    # JAMAIS de format horizontal : on ne garde que les fichiers dont la
+                    # hauteur depasse la largeur (le carre reste tolere).
+                    files = [f for f in vid["video_files"]
+                             if f.get("height", 0) >= f.get("width", 0) > 0
+                             and f["width"] / f["height"] <= MAX_VERTICAL_ASPECT]
+                    if not files:
+                        landscape += 1
+                        continue
+                    hd = [f for f in files if f.get("height", 0) >= PREFERRED_VERTICAL_HEIGHT]
+                    # Master 4K/2K en priorite, sinon le vertical natif le plus defini.
+                    best = (max(hd, key=lambda f: f["height"]) if hd
+                            else max(files, key=lambda f: f.get("height", 0)))
+                    dst = WORK / f"clip_{_clip_seq}.mp4"
+                    _clip_seq += 1
+                    try:
+                        with requests.get(best["link"], stream=True, timeout=60) as s:
+                            with open(dst, "wb") as f:
+                                for c in s.iter_content(1 << 16):
+                                    f.write(c)
+                    except Exception:
+                        continue
+                    visual_ok, _visual_reason = _passes_visual_qa(dst)
+                    if not visual_ok:
+                        dst.unlink(missing_ok=True)
+                        visual_bad += 1
+                        continue
+                    clips.append(dst)
+                    used.append(kw_try)
+                    src[("pixabay" if str(vid_id).startswith("pixabay") else "pexels")] += 1
+                    _seen_ids.add(vid_id)
+                    if dedup and pref:
+                        _seen_prefixes.add(pref)
+                    got += 1
     tag = f" [{label}]" if label else ""
     det = []
     if rejected:
