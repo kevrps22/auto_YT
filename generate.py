@@ -1400,9 +1400,21 @@ def _vid_text(vid: dict) -> str:
     return "-" + re.sub(r"[^a-z0-9]+", "-", raw).strip("-") + "-"
 
 
+# Mots de plomberie presents dans CHAQUE descriptif : ils ne decrivent rien mais
+# gonflaient la taille apparente du texte, ce qui declenchait a tort la regle
+# "descriptif long -> exiger 2 recoupements" sur de simples slugs Pexels.
+_VID_NOISE = frozenset({"", "https", "http", "www", "pexels", "pixabay", "com",
+                        "video", "videos", "photo", "free", "stock", "download"})
+
+
 def _vid_tokens(vid: dict) -> set[str]:
     """Mots entiers du descriptif — base de tous les filtres contextuels."""
     return set(re.split(r"[^a-z0-9]+", _vid_text(vid)))
+
+
+def _vid_content_tokens(tokens: set[str]) -> set[str]:
+    """Tokens qui DECRIVENT reellement le clip : sans plomberie ni identifiants."""
+    return {t for t in tokens if t not in _VID_NOISE and not t.isdigit()}
 
 
 def fetch_pixabay_videos(query: str, per_page: int = 15) -> list[dict]:
@@ -1585,7 +1597,7 @@ def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
                 if phase == 0 and key_tok and key_tok not in tokens:
                     off_topic += 1
                     continue
-                need = 2 if len(tokens) > 12 else 1
+                need = 2 if len(_vid_content_tokens(tokens)) > 10 else 1
                 hits = len(q_tokens & tokens)
                 if q_tokens and hits < min(need, len(q_tokens)) and (phase == 0 or plan_strict):
                     off_topic += 1
