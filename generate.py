@@ -1527,9 +1527,8 @@ def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
         # On exige qu'AU MOINS UN mot significatif de la requete soit dans le titre du
         # clip. Exiger le seul mot principal etait trop rigide : "ancient columns forum"
         # rejetait "ancient-roman-ruins-in-hierapolis", pourtant ideal.
-        plan_strict = strict or structured
-        q_tokens = ({w for w in re.findall(r"[a-z]+", kw.lower())
-                     if w not in _GENERIC and len(w) > 2} if plan_strict else set())
+        q_tokens = {w for w in re.findall(r"[a-z]+", kw.lower())
+                    if w not in _GENERIC and len(w) > 2}
         kw_words = set(re.findall(r"[a-z]+", kw.lower()))
         key_tok = _key_noun(kw)          # mot le plus distinctif de la requete
         must_tokens = set(plan["must_include"])
@@ -1597,10 +1596,17 @@ def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
                 if phase == 0 and key_tok and key_tok not in tokens:
                     off_topic += 1
                     continue
+                # Phase 1 = VRAI repli. Auparavant plan_strict (vrai des que Gemini
+                # renvoyait des ancrages, donc presque toujours) maintenait l'exigence
+                # des deux phases : une requete un peu abstraite ne ramenait alors
+                # aucun clip et le corps de la video restait vide.
                 need = 2 if len(_vid_content_tokens(tokens)) > 10 else 1
+                if phase == 1:
+                    need = 1            # un seul mot commun suffit pour depanner
                 hits = len(q_tokens & tokens)
-                if q_tokens and hits < min(need, len(q_tokens)) and (phase == 0 or plan_strict):
+                if q_tokens and hits < min(need, len(q_tokens)):
                     off_topic += 1
+                    continue
                     continue
                 # meme scene qu'un clip deja pris (3 angles de la meme ruine).
                 # Contrainte SOUPLE : abandonnee en phase 1 pour ne pas finir sans plan.
