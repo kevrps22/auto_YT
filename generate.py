@@ -1162,8 +1162,18 @@ def _anchor_queries(queries: list[str]) -> list[str]:
 def _neg_words(negative: tuple[str, ...]) -> frozenset[str]:
     """Mots simples issus des exclusions DU SUJET. Les expressions multi-mots
     ('modern factory') restent traitees a part, sur le descriptif des clips."""
-    return frozenset(w for neg in negative
-                     for w in re.findall(r"[a-z]+", neg.lower()) if len(w) > 2)
+    # SEULES les exclusions d'UN SEUL MOT deviennent des bans de mot entier.
+    # Decouper une expression etait catastrophique : sur "les cartes bancaires",
+    # Gemini exclut a juste titre "playing card", "sim card", "id card" ; le
+    # decoupage bannissait le mot "card" et jetait 6 requetes sur 8 AVANT la
+    # recherche. Les expressions sont traitees par _negative_hit, qui exige que
+    # TOUS leurs mots soient presents.
+    mots = frozenset()
+    for neg in negative:
+        w = re.findall(r"[a-z]+", neg.lower())
+        if len(w) == 1 and len(w[0]) > 2:
+            mots |= {w[0]}
+    return mots
 
 
 def _drop_banned_queries(queries: list[str], banned: frozenset[str]) -> list[str]:
@@ -2058,42 +2068,13 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float,
 
 
 # ---------------------------------------------------------------- main
-def main():
-    topic = sys.argv[1] if len(sys.argv) > 1 else random.choice(DEFAULT_TOPICS)
-    print(f"=== Sujet : {topic} ===")
-    _seen_prefixes.clear()        # dedoublonnage de scenes propre a cette video
-    _seen_ids.clear()
-    script = make_script(topic)
-    # Nouveau contrat : hook -> trois faits concrets -> chute/raccord.
-    # Les anciennes archives restent generables si Gemini renvoie encore le schema precedent.
-    facts = script.get("facts")
-    if isinstance(facts, list) and len([f for f in facts if str(f).strip()]) == 3:
-        fact_tones = ("tension", "body", "revelation")
-        segments = ([{"text": script.get("hook", ""), "tone": "hook"}]
-                    + [{"text": str(f).strip(), "tone": tone}
-                       for f, tone in zip(facts, fact_tones)]
-                    + [{"text": script.get("loop", ""), "tone": "loop"}])
-    else:
-        segments = [{"text": script.get(k, ""), "tone": k}
-                    for k in ("hook", "tension", "body", "revelation", "loop")]
-    narration = " ".join(s["text"] for s in segments if s["text"])
+def select_visuals(script: dict, topic: str) -> dict:
+    """Choisit TOUS les visuels d'une video : images IA du hook, frame 0, corps.
 
-    audio, timeline = make_voice(segments)
-    voice_dur = sum(it["dur"] for it in timeline)
-    total = LEAD + voice_dur + TAIL          # ~0.3s + voix + outro
-    try:
-        words = align_words(audio)           # sync mot par mot (faster-whisper)
-        words = _remap_words(words, narration)   # ...mais on affiche le texte du script
-        print(f"[align] {len(words)} mots alignes")
-    except Exception as e:
-        print(f"[align] echec ({e}) -> timing estime")
-        words = None
-    ass = WORK / "subs.ass"
-    build_subtitles(timeline, words, total, ass, emphasis=script.get("emphasis"), offset=LEAD,
-                    overlay=script.get("overlay"))
-    # Le hook doit etre ILLUSTRE par ce qu'il raconte : on cherche d'abord des clips
-    # colles au texte du hook, ils occuperont les tout premiers plans.
-    # sujet historique -> toute personne/objet moderne a l'image est un anachronisme
+    Extrait de main() pour qu'un banc d'essai puisse mesurer la selection sans
+    produire de video. Les tests qui re-implementaient ce chemin divergeaient de
+    la vraie chaine et donnaient de faux succes.
+    """
     extra_ban = HISTORICAL_TOKENS if script.get("historical") else frozenset()
     if extra_ban:
         print("[visuels] sujet historique -> presence humaine moderne exclue")
@@ -2167,8 +2148,57 @@ def main():
                              strict=strict, negative=negative, allow=allow,
                              species=subject_species)
     clips = hook_clips + body_clips or hook_clips or body_clips
-    # le clip de frame 0 est en tete de liste : assemble() l'epingle a t=0
-    pinned_first = bool(first)
+    return {"clips": clips, "hook_clips": hook_clips, "body_clips": body_clips,
+            "first": first, "pinned_first": bool(first),
+            "hook_plans": hook_plans, "body_plans": body_plans,
+            "reveal_plan": reveal_plan, "anchors": anchors, "allow": allow,
+            "strict": strict, "negative": negative, "extra_ban": extra_ban,
+            "subject_species": subject_species}
+
+
+def main():
+    topic = sys.argv[1] if len(sys.argv) > 1 else random.choice(DEFAULT_TOPICS)
+    print(f"=== Sujet : {topic} ===")
+    _seen_prefixes.clear()        # dedoublonnage de scenes propre a cette video
+    _seen_ids.clear()
+    script = make_script(topic)
+    # Nouveau contrat : hook -> trois faits concrets -> chute/raccord.
+    # Les anciennes archives restent generables si Gemini renvoie encore le schema precedent.
+    facts = script.get("facts")
+    if isinstance(facts, list) and len([f for f in facts if str(f).strip()]) == 3:
+        fact_tones = ("tension", "body", "revelation")
+        segments = ([{"text": script.get("hook", ""), "tone": "hook"}]
+                    + [{"text": str(f).strip(), "tone": tone}
+                       for f, tone in zip(facts, fact_tones)]
+                    + [{"text": script.get("loop", ""), "tone": "loop"}])
+    else:
+        segments = [{"text": script.get(k, ""), "tone": k}
+                    for k in ("hook", "tension", "body", "revelation", "loop")]
+    narration = " ".join(s["text"] for s in segments if s["text"])
+
+    audio, timeline = make_voice(segments)
+    voice_dur = sum(it["dur"] for it in timeline)
+    total = LEAD + voice_dur + TAIL          # ~0.3s + voix + outro
+    try:
+        words = align_words(audio)           # sync mot par mot (faster-whisper)
+        words = _remap_words(words, narration)   # ...mais on affiche le texte du script
+        print(f"[align] {len(words)} mots alignes")
+    except Exception as e:
+        print(f"[align] echec ({e}) -> timing estime")
+        words = None
+    ass = WORK / "subs.ass"
+    build_subtitles(timeline, words, total, ass, emphasis=script.get("emphasis"), offset=LEAD,
+                    overlay=script.get("overlay"))
+    # Le hook doit etre ILLUSTRE par ce qu'il raconte : on cherche d'abord des clips
+    # colles au texte du hook, ils occuperont les tout premiers plans.
+    # sujet historique -> toute personne/objet moderne a l'image est un anachronisme
+    V = select_visuals(script, topic)
+    clips = V["clips"]
+    hook_plans, body_plans = V["hook_plans"], V["body_plans"]
+    reveal_plan, anchors, allow = V["reveal_plan"], V["anchors"], V["allow"]
+    strict, negative = V["strict"], V["negative"]
+    extra_ban, subject_species = V["extra_ban"], V["subject_species"]
+    first, pinned_first = V["first"], V["pinned_first"]
 
     # --- plan de REVELATION : quand la voix nomme le sujet, on doit le VOIR.
     reveal_at, reveal_dur, t = None, 0.0, LEAD
