@@ -1631,10 +1631,20 @@ def fetch_clips(keywords: list[dict | str], n: int = 4, label: str = "",
                         continue
                     # Nouveau contrat : les ancres visuelles sont non negociables. Une
                     # ambiance de coffre sans porte ne peut pas illustrer "vault door".
-                    if must_tokens and not must_tokens.issubset(tokens):
-                        _drop(f'ancre {sorted(must_tokens)}', slug)
-                        off_topic += 1
-                        continue
+                    # Les ancres du contrat Gemini sont imposees INTEGRALEMENT en phase 0.
+                    # En phase 1 on se contente d'une seule d'entre elles : exiger les
+                    # deux sans repli etait, de loin, la premiere cause de rejet (226 sur
+                    # un seul sujet mesure) et laissait le corps de la video vide.
+                    # Phase 1 : l'ancre n'est PLUS exigee du tout. Gemini choisit des
+                    # ancres justes mais trop rares pour une banque d'images ("cells",
+                    # "sparks", "eyelid", "bills") ; aucun clip ne les porte, et
+                    # l'assouplissement "au moins une" ne servait a rien sur les plans
+                    # a une seule ancre. La pertinence reste assuree par q_tokens.
+                    if must_tokens and phase == 0:
+                        if not must_tokens.issubset(tokens):
+                            _drop(f'ancre {sorted(must_tokens)}', slug)
+                            off_topic += 1
+                            continue
                     # jamais deux fois le MEME clip, quelle que soit la phase
                     vid_id = vid.get("id")
                     if vid_id in _seen_ids:

@@ -27,3 +27,6 @@ batch.err
 voices/
 sample_*.wav
 _test_*.py
+.probe_cache/
+probe.log
+dbg.log

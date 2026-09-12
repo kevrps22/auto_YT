@@ -14,10 +14,20 @@ construit sur des images repetees.
 """
 from __future__ import annotations
 
+import json
+import re
 import sys
 import time
+import unicodedata
+from pathlib import Path
 
 import generate as G
+
+# Les scripts Gemini sont CACHES : le quota est de 20 requetes/jour et par
+# modele, et surtout Gemini invente des scenes differentes a chaque appel, ce qui
+# rendait deux mesures incomparables. Avec le cache, seul le FILTRE change entre
+# deux essais. --refresh regenere les scripts.
+CACHE = Path(".probe_cache")
 
 SUJETS = [
     "l'argent liquide", "les cartes bancaires", "le cafe", "tes dents",
@@ -31,8 +41,21 @@ def probe(topic: str) -> dict:
     # l'anti-doublon est global : sans remise a zero, le 2e sujet herite du 1er
     G._seen_ids.clear()
     G._seen_prefixes.clear()
+    # Les images IA du hook coutent ~2 min par sujet et ne changent RIEN au
+    # nombre de clips du corps, seule grandeur mesuree ici. --avec-ia les
+    # reactive quand on veut verifier le chemin complet.
+    G.AI_IMAGES = "--avec-ia" in sys.argv
     t0 = time.time()
-    script = G.make_script(topic)
+    CACHE.mkdir(exist_ok=True)
+    slug = unicodedata.normalize("NFD", topic.lower())
+    slug = re.sub(r"[^a-z0-9]+", "-", "".join(c for c in slug if c.isascii())).strip("-")
+    f = CACHE / f"{slug}.json"
+    if f.exists() and "--refresh" not in sys.argv:
+        script = json.loads(f.read_text(encoding="utf-8"))
+        print(f"[cache] script relu : {script.get('title', '')}")
+    else:
+        script = G.make_script(topic)
+        f.write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
     V = G.select_visuals(script, topic)
     return {"topic": topic, "titre": script.get("title", ""),
             "hook": len(V["hook_clips"]), "body": len(V["body_clips"]),
@@ -40,7 +63,7 @@ def probe(topic: str) -> dict:
 
 
 def main() -> int:
-    sujets = sys.argv[1:] or SUJETS
+    sujets = [a for a in sys.argv[1:] if not a.startswith("--")] or SUJETS
     res = []
     for t in sujets:
         print(f"\n{'=' * 72}\n### {t}\n{'=' * 72}")
