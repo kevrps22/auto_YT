@@ -1159,21 +1159,25 @@ def _anchor_queries(queries: list[str]) -> list[str]:
     return kept or queries          # jamais tout jeter
 
 
-def _neg_words(negative: tuple[str, ...]) -> frozenset[str]:
-    """Mots simples issus des exclusions DU SUJET. Les expressions multi-mots
-    ('modern factory') restent traitees a part, sur le descriptif des clips."""
-    # SEULES les exclusions d'UN SEUL MOT deviennent des bans de mot entier.
-    # Decouper une expression etait catastrophique : sur "les cartes bancaires",
-    # Gemini exclut a juste titre "playing card", "sim card", "id card" ; le
-    # decoupage bannissait le mot "card" et jetait 6 requetes sur 8 AVANT la
-    # recherche. Les expressions sont traitees par _negative_hit, qui exige que
-    # TOUS leurs mots soient presents.
-    mots = frozenset()
+def _neg_words(negative: tuple[str, ...], protege: frozenset[str] = frozenset()) -> frozenset[str]:
+    """Mots bannis issus des exclusions DU SUJET.
+
+    Regle : on bannit chaque mot des exclusions, SAUF ceux qui decrivent le sujet
+    lui-meme (ses ancrages). Les deux extremes etaient mauvais :
+    - tout decouper bannissait "card" sur un short consacre aux cartes bancaires
+      (Gemini exclut a raison "playing card", "sim card", "id card") ;
+    - n'accepter que les mots isoles laissait passer un plongeur en bouteilles
+      malgre l'exclusion "scuba diver", car "diver-exploring-reef" ne contient
+      pas "scuba" et l'expression exigeait ses deux mots.
+    Proteger les ancrages tranche : "card" survit quand la video parle de cartes,
+    "diver" tombe quand elle parle de requins.
+    """
+    mots = set()
     for neg in negative:
-        w = re.findall(r"[a-z]+", neg.lower())
-        if len(w) == 1 and len(w[0]) > 2:
-            mots |= {w[0]}
-    return mots
+        for w in re.findall(r"[a-z]+", neg.lower()):
+            if len(w) > 2 and w not in protege:
+                mots.add(w)
+    return frozenset(mots)
 
 
 def _drop_banned_queries(queries: list[str], banned: frozenset[str]) -> list[str]:
@@ -2105,7 +2109,9 @@ def select_visuals(script: dict, topic: str) -> dict:
     if subject_species:
         print(f"[visuels] sujet animalier : {'/'.join(sorted(subject_species))}")
     # --- exclusions et ancrages PROPRES A CE SUJET (produits par Gemini)
-    neg_words = _neg_words(negative)          # pour filtrer les REQUETES
+    _anchor_words = frozenset(w for a in script.get("anchor_keywords", []) if a
+                              for w in re.findall(r"[a-z]+", str(a).lower()) if len(w) > 2)
+    neg_words = _neg_words(negative, _anchor_words)   # pour filtrer les REQUETES
     extra_ban = frozenset(extra_ban) | neg_words   # ...et les clips, par mot entier
     anchors = tuple(a for a in script.get("anchor_keywords", []) if a)
     if anchors:
@@ -2148,12 +2154,26 @@ def select_visuals(script: dict, topic: str) -> dict:
         body_plans, lambda qs: _drop_banned_queries(qs, neg_words))
     body_plans = _filter_visual_plans(
         body_plans, lambda qs: _drop_other_species(qs, subject_species))
-    if anchors:                       # garantit des plans qui montrent le sujet
-        anchor_query = " ".join(anchors[:2])
-        body_plans += [_normalise_visual_plan({"query": anchor_query,
-                                                "must_include": anchors[:2],
-                                                "shot": "detail",
-                                                "look": ["cinematic", "dark", "high_detail"]})]
+    if anchors:
+        # Gemini ecrit des scenes volontairement indirectes ("rayons de supermarche
+        # vides" pour les abeilles) : c'est le propos meme de la video et il faut les
+        # garder. Mais illustrees au premier degre elles derivent — un short sur les
+        # requins recevait une foret, un pont et une medecin. On INTERCALE donc des
+        # plans du sujet toutes les ~3 scenes, pour qu'il reste present a l'ecran
+        # sans effacer le recit.
+        variantes = [" ".join(anchors[:2]), anchors[0],
+                     " ".join(anchors[1:3]) or anchors[0]]
+        fusion = []
+        for pos, plan in enumerate(body_plans):
+            fusion.append(plan)
+            if pos % 3 == 2:
+                q = variantes[(pos // 3) % len(variantes)]
+                fusion.append(_normalise_visual_plan(
+                    {"query": q, "must_include": [anchors[0]], "shot": "detail",
+                     "look": ["cinematic", "dark", "high_detail"]}))
+        body_plans = fusion + [_normalise_visual_plan(
+            {"query": " ".join(anchors[:2]), "must_include": list(anchors[:2]),
+             "shot": "detail", "look": ["cinematic", "dark", "high_detail"]})]
     body_clips = fetch_clips(body_plans, n=12, label="corps", banned_tokens=extra_ban,
                              strict=strict, negative=negative, allow=allow,
                              species=subject_species)
