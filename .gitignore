@@ -30,3 +30,8 @@ _test_*.py
 .probe_cache/
 probe.log
 dbg.log
+
+# --- clipper : medias sources et rendus (lourds, jamais commites) ---
+clipper/src/
+clipper/out/
+clipper/*.log

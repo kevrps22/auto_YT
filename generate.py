@@ -101,11 +101,13 @@ FONT = "Anton"                       # police des sous-titres (fichier dans font
 LEAD = 0.0                           # la voix demarre a la SECONDE 0, aucun temps mort
 TAIL = 0.6                           # queue minimale : 2s de silence en fin de video
                                      # cassaient la boucle et invitaient au swipe
-CUT_MIN, CUT_MAX = 1.5, 2.1          # duree d'un plan (guide : nouvelle ancre visuelle
+CUT_MIN, CUT_MAX = 1.6, 2.4          # duree d'un plan (guide : nouvelle ancre visuelle
                                      # toutes les 1,5-2 s, sinon lassitude et decrochage)
 # --- Hook VISUEL : 60% des vues sont sans son -> l'image doit accrocher seule.
 HOOK_WINDOW = 3.2                    # duree de la zone "hook" traitee a part
-HOOK_CUT_MIN, HOOK_CUT_MAX = 0.45, 0.7  # coupes tres rapides = pattern interrupt permanent
+# Montage PRO (13/09/2026) : sur de la vraie video, des plans de 0,45 s ne laissent
+# pas voir l'action et font clip genere. 0,8-1,1 s reste rapide mais lisible.
+HOOK_CUT_MIN, HOOK_CUT_MAX = 0.8, 1.1
 # --- Sortie de hook PROGRESSIVE (mesure Analytics du 12/09/2026) ---
 # 21 videos sur 25 avaient leur plus forte chute d'audience entre 4.4 et 5.3 s,
 # soit le premier plan lent apres la fin du hook. Le montage passait d'un coup
@@ -115,30 +117,31 @@ HOOK_CUT_MIN, HOOK_CUT_MAX = 0.45, 0.7  # coupes tres rapides = pattern interrup
 # On etale desormais ce retour au calme jusqu'a DECAY_UNTIL.
 DECAY_UNTIL = 9.0                    # fin de la transition hook -> corps
 HOOK_PUNCH = True                    # snap zoom sur CHAQUE plan du hook
-HOOK_PUNCH_FROM = 1.55               # zoom de depart du punch d'ouverture
-HOOK_SHAKE = True                    # secousse camera sur le 1er plan (synchro avec le boom)
-HOOK_FLASH = True                    # flash blanc bref a chaque coupe du hook
+HOOK_PUNCH_FROM = 1.08               # leger push-in, pas un snap zoom
+HOOK_SHAKE = False                   # secousse camera sur le 1er plan (synchro avec le boom)
+HOOK_FLASH = False                   # flash blanc bref a chaque coupe du hook
 # Le stock est souvent trop sombre : on releve franchement les basses lumieres.
 # Une frame 0 sombre se lit mal en 200 ms et fait swiper.
-HOOK_GRADE = ("eq=contrast=1.22:saturation=1.32:brightness=0.07:gamma=1.12,"
-              "unsharp=5:5:0.9")     # image plus percutante + nettete accrue
+HOOK_GRADE = "eq=contrast=1.06:saturation=1.08:brightness=0.02"   # naturel, a peine releve
 # --- VFX du hook (spectacle des 3 premieres secondes)
-VFX_GLITCH = True                    # aberration chromatique RGB a 0s (effet glitch cinema)
+VFX_GLITCH = False                   # aberration chromatique RGB a 0s (effet glitch cinema)
 VFX_GLITCH_AMP = 22                  # amplitude du decalage RGB en pixels
-VFX_DUTCH = True                     # dutch angle : plans inclines = instabilite/urgence
+VFX_DUTCH = False                    # dutch angle : plans inclines = instabilite/urgence
 VFX_DUTCH_DEG = 5.0                  # inclinaison en degres
-VFX_VIGNETTE = True                  # vignettage sur le hook : focalise le regard au centre
+VFX_VIGNETTE = False                 # vignettage sur le hook : focalise le regard au centre
 # Sous-titres tres courts : sur mobile, un ou deux mots lus au rythme de la voix
 # gardent davantage l'oeil que des phrases de trois ou quatre mots.
 HOOK_WORDS_PER_LINE = 2
 SUBTITLE_WORDS_PER_LINE = 2
 # --- Texte d'accroche PLEIN ECRAN a la frame 0 (independant des sous-titres).
 # 60% des vues demarrent sans son : ce texte doit vendre la video a lui seul.
-OVERLAY_ENABLED = True
+OVERLAY_ENABLED = False              # une seule couche de texte : les sous-titres
 OVERLAY_UNTIL = 2.2                  # duree d'affichage (s) — disparait avant le twist
 OVERLAY_FS = 168                     # tres gros : lisible en 200 ms sur un ecran de poche
 # --- Images IA pour le hook (Pollinations : gratuit, sans cle, illimite)
-AI_IMAGES = True                     # False -> uniquement du stock Pexels
+# Images fixes generees : on voyait trois images synthetiques revenir en boucle, et
+# l'aspect IA saute aux yeux. De la vraie video uniquement.
+AI_IMAGES = False                    # False -> uniquement du stock Pexels
 AI_IMAGE_COUNT = 3                   # nb d'images generees pour les premiers plans
 AI_IMAGE_TIMEOUT = 90
 AI_PUNCH_FROM = 1.22                 # zoom d'ouverture reduit sur les images (576x1024 natif)
@@ -1818,6 +1821,18 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float,
             pool.remove(0)
             pool.append(0)
         recycled = 0
+        # PAS DE PLAN EN DOUBLE : si le pool ne couvre pas la voix au rythme nominal,
+        # on ALLONGE les plans au lieu de reboucler. Revoir un meme clip trois fois
+        # est le signe le plus visible d'une video generee.
+        _t, _n = 0.0, 0
+        while _t < total:
+            _r = 0.0 if _t < HOOK_WINDOW else min(1.0, (_t - HOOK_WINDOW)
+                                                  / max(0.1, DECAY_UNTIL - HOOK_WINDOW))
+            _t += ((HOOK_CUT_MIN + HOOK_CUT_MAX) / 2) * (1 - _r) + ((CUT_MIN + CUT_MAX) / 2) * _r
+            _n += 1
+        stretch = min(2.5, max(1.0, _n / max(1, n_pool)))
+        if stretch > 1.0:
+            print(f"[montage] {n_pool} clips pour ~{_n} plans -> plans allonges x{stretch:.2f}")
         while elapsed < total + 0.6:
             # le plan de revelation part des que la voix l'atteint, et une seule fois
             on_reveal = (reveal_idx is not None and not reveal_done
@@ -1837,8 +1852,8 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float,
             # pour qu'aucun parametre ne bascule d'un seul coup (cf. DECAY_UNTIL).
             ramp = 0.0 if in_hook else min(1.0, (elapsed - HOOK_WINDOW)
                                            / max(0.1, DECAY_UNTIL - HOOK_WINDOW))
-            lo = HOOK_CUT_MIN + (CUT_MIN - HOOK_CUT_MIN) * ramp
-            hi = HOOK_CUT_MAX + (CUT_MAX - HOOK_CUT_MAX) * ramp
+            lo = (HOOK_CUT_MIN + (CUT_MIN - HOOK_CUT_MIN) * ramp) * stretch
+            hi = (HOOK_CUT_MAX + (CUT_MAX - HOOK_CUT_MAX) * ramp) * stretch
             cut = random.uniform(lo, hi)
             if on_reveal:
                 # la revelation reste a l'ecran tant que la voix la prononce
@@ -1856,8 +1871,12 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float,
                     snapped = _snap(elapsed + cut, cuts_strong, cuts_soft) - elapsed
                     if CUT_MIN * 0.6 <= snapped <= CUT_MAX * 1.6:
                         cut = snapped
+            if not img and not on_reveal:
+                cut = min(cut, max(0.6, src_dur - 0.15))
             lap = i // len(clips)                  # tour de boucle -> decale la portion utilisee
-            start = min(max(0.0, src_dur - cut - 0.1), lap * cut * 1.7)
+            # Les premieres secondes d'un clip de banque sont souvent les plus plates
+            # (cadre qui s'installe, fondu d'entree) : on part vers le quart du clip.
+            start = min(max(0.0, src_dur - cut - 0.1), src_dur * 0.25 + lap * cut * 1.7)
             if on_reveal:
                 start = 0.0                        # le sujet est cadre des les 1res images
             p = WORK / f"seg_{i}.mp4"
@@ -1866,7 +1885,7 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float,
             # Les images IA font 576x1024 en natif : on limite fortement le zoom sinon
             # l'agrandissement cumule (upscale x zoom) pixellise l'image.
             pf = AI_PUNCH_FROM if img else HOOK_PUNCH_FROM
-            zmax = 1.16 if img else 1.30
+            zmax = 1.06 if img else 1.10
             if i == 0 and HOOK_PUNCH:
                 # SNAP ZOOM d'ouverture : zoom brutal qui se resorbe en ~0.35s
                 # (les zooms rapides surpassent les plans statiques d'un facteur 2.5)
@@ -1879,9 +1898,9 @@ def assemble(audio: Path, ass: Path, clips: list[Path], out: Path, total: float,
                 # Vitesse de zoom interpolee : punch du hook -> Ken Burns lent du
                 # corps. Sans interpolation, le mouvement chutait d'un facteur 7
                 # au meme instant que les coupes et que l'etalonnage.
-                sp_hook = 0.006 if img else 0.011
-                sp = sp_hook + (0.0016 - sp_hook) * ramp
-                zm = zmax + (1.25 - zmax) * ramp
+                sp_hook = 0.002 if img else 0.003
+                sp = sp_hook + (0.0007 - sp_hook) * ramp
+                zm = zmax + (1.08 - zmax) * ramp
                 z = (f"max({zm:.3f}-{sp:.5f}*on,1.02)" if i % 2 == 0
                      else f"min(1.02+{sp:.5f}*on,{zm:.3f})")
 
