@@ -374,3 +374,33 @@ L'app est passee en **Production** le 12/09/2026 (le mode Test revoquait le
 refresh_token tous les 7 jours, ce qui a fait taire la chaine 24 jours). Ecran
 de consentement adosse a https://kevrps22.github.io (depot public
 `kevrps22/kevrps22.github.io`), verifie dans Search Console.
+
+---
+
+## 12. Clipper — Shorts decoupes dans une video longue (13/09/2026)
+
+Nouvelle methode, facon Opus Clip. Le montage sur banques d'images a atteint son
+plafond (des levres et un tissu orange pour un sujet « requins »).
+
+```
+python clipper/transcribe.py clipper/src/<id>.mp4           transcription mot a mot (~temps reel CPU)
+python clipper/clipper.py clipper/src/<id>.mp4 --n 8 --titre "..."
+```
+
+Chaine : changements d'image (ffmpeg scene) + transcription -> Gemini choisit les
+moments -> calage image ET phrase -> rendu 1080x1920 a la cadence de la source.
+
+**Compare a 11 clips Opus Clip de la meme video** (`clipper/opus_map.json`) :
+- Opus coupe sur les changements d'image (13 frontieres sur 20 a moins de 0,6 s)
+  mais ignore la parole : debuts en plein mot. On ouvre sur l'image ET sur un
+  debut de phrase, et on finit sur un point final avant l'image suivante.
+- Repris d'Opus : encadre d'accroche blanc pendant 3,2 s, sous-titres en casse
+  normale avec mot actif en couleur, 60 i/s.
+- Mieux qu'Opus : pas de filigrane, sponsors et dons exclus, pas de recadrage
+  automatique sur les avatars (5 plans vides sur un seul de ses clips).
+
+Pieges regles : marge de fin qui mordait la phrase suivante (ils enchainent a
+40 ms), apostrophes coupees par Whisper (« C 'EST »), groupes de sous-titres a
+cheval sur deux phrases, bouts de replique precedente en ouverture, fins sur
+« Euh... ». La video source est sous licence YouTube standard : ne rien publier
+sans l'accord du createur.

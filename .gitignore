@@ -35,3 +35,4 @@ dbg.log
 clipper/src/
 clipper/out/
 clipper/*.log
+clipper/opus/
