@@ -196,6 +196,11 @@ def caler(clip: dict, words: list[dict], phr: list[dict],
         coupe = [w for w in words if w["s"] < s and w["e"] > cut]
         if not coupe and 0 <= s - cut <= 1.2:
             s = cut
+        elif s < cut <= s + 0.3:
+            # l'image change juste APRES le premier mot : ouvrir avant montrait le post
+            # precedent pendant quelques images (le clip de l'ascenseur s'ouvrait sur
+            # le pistolet a colle). On ouvre sur la nouvelle image.
+            s = cut
     # Un bout de replique precedente colle au debut ("Pour la place. Moi, je me
     # brosse...", "fils de... Non, non") : 3 mots au plus, prononces sans pause apres
     # le mot d'avant. Whisper y met un point, mais c'est la fin d'une autre phrase.
@@ -256,6 +261,10 @@ def caler(clip: dict, words: list[dict], phr: list[dict],
     avant = [w["e"] for w in words if w["e"] <= s]
     apres_mots = [w["s"] for w in words if w["s"] >= e]
     marge_d = min(0.08, max(0.0, s - (avant[-1] if avant else 0.0) - 0.02))
+    # la marge de debut ne doit pas non plus repasser avant l'apparition de l'image
+    image_avant = max((c for c in cuts if c <= s + 0.001), default=None)
+    if image_avant is not None:
+        marge_d = min(marge_d, max(0.0, s - image_avant))
     marge_f = min(0.5, max(0.0, (apres_mots[0] if apres_mots else e + 0.5) - e - 0.03))
     fin_parole = e
     s, e = max(0.0, s - marge_d), e + marge_f
@@ -263,7 +272,9 @@ def caler(clip: dict, words: list[dict], phr: list[dict],
     # jamais la parole pour autant : 3 images de trop genent moins qu'un mot tronque
     nxt = min((c for c in cuts if c > fin_parole - 0.05), default=None)
     if nxt is not None and nxt < e:
-        e = max(fin_parole + 0.02, nxt - 0.04)
+        # on tolere de rogner 50 ms de fin de mot : inaudible, et en deca de la
+        # precision des horodatages de Whisper
+        e = max(fin_parole - 0.05, nxt - 0.02)
     return s, e
 
 
@@ -350,27 +361,20 @@ def slug(t: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", t).strip("-")[:50]
 
 
-def main() -> int:
-    src = Path(sys.argv[1])
-    n = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else 8
-    titre_src = sys.argv[sys.argv.index("--titre") + 1] if "--titre" in sys.argv else src.stem
+def produire(src: Path, choix: list[dict], n: int, suivi=None) -> list[dict]:
+    """Cale et rend les extraits choisis. Ecrit l'index `out/<id>.json` lu par la page
+    locale. `suivi(i, total, clip)` est appele avant chaque rendu."""
     words = recoller(json.loads(src.with_suffix(".words.json").read_text(encoding="utf-8")))
     phr = phrases(words)
     cuts = scenes(src)
-    print(f"[source] {len(words)} mots, {len(phr)} phrases, {len(cuts)} changements d'image")
-
-    cache = src.with_suffix(".clips.json")
-    if cache.exists() and "--rechoisir" not in sys.argv:
-        choix = json.loads(cache.read_text(encoding="utf-8"))
-        print("[choix] relu depuis le cache")
-    else:
-        choix = choisir(phr, cuts, n, titre_src)
-        cache.write_text(json.dumps(choix, ensure_ascii=False, indent=1), encoding="utf-8")
-
     out = HERE / "out"
     out.mkdir(exist_ok=True)
+    for vieux in out.glob(f"{src.stem}_*"):       # un nouveau rendu remplace l'ancien
+        vieux.unlink()
     pris: list[tuple[float, float]] = []
-    for i, c in enumerate(choix[:n], 1):
+    rendus: list[dict] = []
+    retenus = choix[:n]
+    for i, c in enumerate(retenus, 1):
         s, e = caler(c, words, phr, cuts)
         if e - s < MIN_S - 3:
             print(f"[{i}] ignore : {e - s:.0f}s apres calage, trop court")
@@ -379,13 +383,43 @@ def main() -> int:
             print(f"[{i}] ignore : chevauche un extrait deja retenu")
             continue
         pris.append((s, e))
+        if suivi:
+            suivi(i, len(retenus), c)
         base = out / f"{src.stem}_{i}_{slug(c.get('titre', 'clip'))}"
         ass = base.with_suffix(".ass")
         sous_titres(words, s, e, ass, c.get("accroche_ecran") or "")
         print(f"[{i}] {s:.1f}-{e:.1f}s ({e - s:.0f}s) score {c.get('score')} : {c.get('titre')}")
-        print(f"     accroche : {c.get('accroche_ecran')}")
         rendre(src, s, e, ass, base.with_suffix(".mp4"))
-        print(f"     -> {base.with_suffix('.mp4').name}")
+        ass.unlink(missing_ok=True)
+        rendus.append({"fichier": base.with_suffix(".mp4").name, "titre": c.get("titre", ""),
+                       "accroche": c.get("accroche_ecran", ""), "score": c.get("score"),
+                       "debut": round(s, 2), "fin": round(e, 2), "duree": round(e - s, 1)})
+    info_f = src.with_suffix(".info.json")
+    info = json.loads(info_f.read_text(encoding="utf-8")) if info_f.exists() else {"id": src.stem}
+    index = {**info, "genere": __import__("time").strftime("%Y-%m-%d %H:%M"), "clips": rendus}
+    (out / f"{src.stem}.json").write_text(json.dumps(index, ensure_ascii=False, indent=1),
+                                          encoding="utf-8")
+    return rendus
+
+
+def choix_moments(src: Path, n: int, titre_src: str, rechoisir: bool = False) -> list[dict]:
+    """Choix Gemini, mis en cache a cote de la source."""
+    cache = src.with_suffix(".clips.json")
+    if cache.exists() and not rechoisir:
+        print("[choix] relu depuis le cache")
+        return json.loads(cache.read_text(encoding="utf-8"))
+    words = recoller(json.loads(src.with_suffix(".words.json").read_text(encoding="utf-8")))
+    choix = choisir(phrases(words), scenes(src), n, titre_src)
+    cache.write_text(json.dumps(choix, ensure_ascii=False, indent=1), encoding="utf-8")
+    return choix
+
+
+def main() -> int:
+    src = Path(sys.argv[1])
+    n = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else 8
+    titre_src = sys.argv[sys.argv.index("--titre") + 1] if "--titre" in sys.argv else src.stem
+    choix = choix_moments(src, n, titre_src, "--rechoisir" in sys.argv)
+    produire(src, choix, n)
     return 0
 
 

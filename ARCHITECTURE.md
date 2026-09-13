@@ -404,3 +404,16 @@ Pieges regles : marge de fin qui mordait la phrase suivante (ils enchainent a
 cheval sur deux phrases, bouts de replique precedente en ouverture, fins sur
 « Euh... ». La video source est sous licence YouTube standard : ne rien publier
 sans l'accord du createur.
+
+### Page locale
+
+```
+python clipper/web.py        http://localhost:8765 (et l'adresse Wi-Fi affichee, pour le telephone)
+```
+
+On colle un lien YouTube, la page enchaine telechargement, transcription,
+changements d'image, choix Gemini et rendu (`clipper/pipeline.py`), avec une
+barre d'avancement et une estimation du temps restant. Les clips s'affichent avec
+lecteur, score, telechargement et copie du titre. Un seul traitement a la fois.
+Les etapes deja faites pour une video sont en cache dans `clipper/src`.
+Mesure : 8 clips rendus en 5 min 40 quand la transcription est en cache.

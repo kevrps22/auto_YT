@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clipper</title>
+<style>
+  :root {
+    --bg: #0e0f13; --panel: #171920; --panel2: #1e2129; --line: #2a2e38;
+    --txt: #eceef3; --dim: #9197a3; --accent: #ffb020; --accent2: #ff7a1a;
+    --ok: #3ecf8e; --err: #ff5d5d; --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt);
+         font: 15px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 18px 80px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 22px; }
+  header h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
+  header h1 span { color: var(--accent); }
+  header p { margin: 0; color: var(--dim); }
+
+  .card { background: var(--panel); border: 1px solid var(--line);
+          border-radius: var(--radius); padding: 18px; margin-bottom: 18px; }
+  form { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; }
+  input[type=url], select {
+    background: var(--panel2); color: var(--txt); border: 1px solid var(--line);
+    border-radius: 10px; padding: 13px 14px; font: inherit; min-width: 0; }
+  input[type=url]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; cursor: pointer; }
+  .go { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #1a1205;
+        padding: 13px 20px; white-space: nowrap; }
+  .go:disabled { opacity: .45; cursor: not-allowed; }
+  .opts { grid-column: 1 / -1; color: var(--dim); font-size: 13px; display: flex; gap: 8px;
+          align-items: center; }
+  @media (max-width: 640px) { form { grid-template-columns: 1fr 1fr; }
+    form input[type=url] { grid-column: 1 / -1; } }
+
+  #progress[hidden], #erreur[hidden] { display: none; }
+  .steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 14px; }
+  .step { font-size: 12.5px; color: var(--dim); display: flex; align-items: center; gap: 7px; }
+  .dot { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line);
+         display: grid; place-items: center; font-size: 11px; flex: none; }
+  .step.actif { color: var(--txt); }
+  .step.actif .dot { border-color: var(--accent); box-shadow: 0 0 0 3px #ffb02033; }
+  .step.fait { color: var(--txt); }
+  .step.fait .dot { background: var(--ok); border-color: var(--ok); color: #06170f; }
+  @media (max-width: 640px) { .steps { grid-template-columns: 1fr; } }
+  .bar { height: 10px; background: var(--panel2); border-radius: 99px; overflow: hidden; }
+  .bar div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2));
+             transition: width .6s ease; }
+  .meta { display: flex; justify-content: space-between; gap: 12px; margin-top: 9px;
+          color: var(--dim); font-size: 13px; flex-wrap: wrap; }
+  .meta b { color: var(--txt); font-weight: 600; }
+  #erreur { border-color: #5a2a2a; background: #231416; color: #ffc9c9; }
+
+  .video { margin-top: 30px; }
+  .video-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 14px;
+                flex-wrap: wrap; margin-bottom: 12px; }
+  .video-head h2 { margin: 0; font-size: 18px; }
+  .video-head .sub { color: var(--dim); font-size: 13px; }
+  .licence { font-size: 12.5px; padding: 6px 10px; border-radius: 8px;
+             background: #2a2210; color: #ffd98a; border: 1px solid #4a3a14; }
+  .licence.cc { background: #10241b; color: #9ff0c8; border-color: #1d4a35; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .clip { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+          overflow: hidden; display: flex; flex-direction: column; }
+  .clip video { width: 100%; aspect-ratio: 9 / 16; background: #000; display: block; }
+  .clip .body { padding: 11px 12px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .clip .top { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--dim); }
+  .score { font-weight: 700; padding: 2px 8px; border-radius: 99px; font-size: 12px; }
+  .s-hi { background: #3ecf8e22; color: var(--ok); }
+  .s-mid { background: #ffb02022; color: var(--accent); }
+  .s-lo { background: #ffffff14; color: var(--dim); }
+  .clip h3 { margin: 0; font-size: 14.5px; line-height: 1.3; }
+  .clip .hook { color: var(--dim); font-size: 13px; margin: 0; }
+  .actions { display: flex; gap: 6px; margin-top: auto; padding-top: 6px; }
+  .actions a, .actions button { flex: 1; text-align: center; padding: 9px 8px; font-size: 13px;
+    border-radius: 9px; background: var(--panel2); color: var(--txt); border: 1px solid var(--line);
+    text-decoration: none; font-weight: 600; }
+  .actions a:hover, .actions button:hover { border-color: var(--accent); }
+  .vide { color: var(--dim); text-align: center; padding: 40px 10px; }
+  @media (max-width: 640px) {
+    .wrap { padding: 18px 12px 60px; }
+    .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .clip .body { padding: 9px; }
+    .clip h3 { font-size: 13px; }
+    .clip .hook { display: none; }
+    .actions { flex-direction: column; }
+    .actions a, .actions button { padding: 8px 6px; font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Clip<span>per</span></h1>
+    <p>Des Shorts à partir d'une vidéo YouTube</p>
+  </header>
+
+  <div class="card">
+    <form id="form">
+      <input type="url" id="url" placeholder="Colle le lien de la vidéo YouTube" required>
+      <select id="n" aria-label="Nombre de clips">
+        <option value="4">4 clips</option>
+        <option value="6">6 clips</option>
+        <option value="8" selected>8 clips</option>
+        <option value="10">10 clips</option>
+      </select>
+      <button class="go" id="go" type="submit">Générer les clips</button>
+      <label class="opts"><input type="checkbox" id="rechoisir">
+        Refaire le choix des moments si la vidéo a déjà été traitée</label>
+    </form>
+  </div>
+
+  <div class="card" id="progress" hidden>
+    <div class="steps" id="steps"></div>
+    <div class="bar"><div id="barfill"></div></div>
+    <div class="meta">
+      <span id="detail">…</span>
+      <span><b id="pct">0 %</b> · <span id="temps"></span></span>
+    </div>
+  </div>
+
+  <div class="card" id="erreur" hidden></div>
+
+  <div id="biblio"></div>
+</div>
+
+<script>
+const ETAPES = [
+  ["telechargement", "Téléchargement"], ["transcription", "Transcription"],
+  ["images", "Changements d'image"], ["choix", "Choix des moments"], ["rendu", "Rendu des clips"],
+];
+const $ = (id) => document.getElementById(id);
+let dernierEtat = null;
+
+function mmss(s) {
+  s = Math.max(0, Math.round(s));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+function esc(t) {
+  return String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function afficherEtat(e) {
+  const enCours = e.etat === "en_cours";
+  $("go").disabled = enCours;
+  $("progress").hidden = !enCours;
+  $("erreur").hidden = e.etat !== "erreur";
+  if (e.etat === "erreur") $("erreur").textContent = "Échec : " + e.erreur;
+  if (!enCours) return;
+
+  const idx = ETAPES.findIndex(([k]) => k === e.etape);
+  $("steps").innerHTML = ETAPES.map(([k, label], i) => {
+    const cls = i < idx ? "fait" : i === idx ? "actif" : "";
+    return `<div class="step ${cls}"><span class="dot">${i < idx ? "✓" : i + 1}</span>${label}</div>`;
+  }).join("");
+  const p = e.avance || 0;
+  $("barfill").style.width = (p * 100).toFixed(1) + "%";
+  $("pct").textContent = Math.floor(p * 100) + " %";
+  $("detail").textContent = e.detail || "";
+  let t = mmss(e.ecoule || 0) + " écoulées";
+  if (p > 0.04 && e.ecoule > 20) t += ` · environ ${Math.ceil((e.ecoule * (1 - p) / p) / 60)} min restantes`;
+  $("temps").textContent = t;
+}
+
+async function rafraichirEtat() {
+  try {
+    const e = await (await fetch("/api/etat")).json();
+    afficherEtat(e);
+    if (dernierEtat === "en_cours" && e.etat === "termine") await chargerBiblio();
+    dernierEtat = e.etat;
+    setTimeout(rafraichirEtat, e.etat === "en_cours" ? 1000 : 4000);
+  } catch {
+    setTimeout(rafraichirEtat, 4000);
+  }
+}
+
+function classeScore(s) { return s >= 85 ? "s-hi" : s >= 70 ? "s-mid" : "s-lo"; }
+
+async function chargerBiblio() {
+  const vids = await (await fetch("/api/videos")).json();
+  if (!vids.length) {
+    $("biblio").innerHTML = `<div class="vide">Aucun clip pour l'instant. Colle un lien pour commencer.</div>`;
+    return;
+  }
+  $("biblio").innerHTML = vids.map((v) => {
+    const cc = /creative/i.test(v.licence || "");
+    const licence = cc
+      ? `<span class="licence cc">Creative Commons : réutilisation autorisée</span>`
+      : `<span class="licence">Licence YouTube standard : demande l'accord du créateur avant de publier</span>`;
+    const clips = v.clips.map((c) => `
+      <div class="clip">
+        <video src="/clips/${encodeURIComponent(c.fichier)}" controls preload="metadata" playsinline></video>
+        <div class="body">
+          <div class="top"><span class="score ${classeScore(c.score)}">${c.score ?? "?"}</span>
+            <span>${Math.round(c.duree)} s</span></div>
+          <h3>${esc(c.titre)}</h3>
+          <p class="hook">${esc(c.accroche)}</p>
+          <div class="actions">
+            <a href="/clips/${encodeURIComponent(c.fichier)}?dl=1">Télécharger</a>
+            <button type="button" data-titre="${esc(c.titre)}">Copier le titre</button>
+          </div>
+        </div>
+      </div>`).join("");
+    return `<section class="video">
+      <div class="video-head">
+        <div><h2>${esc(v.titre || v.id)}</h2>
+          <div class="sub">${esc(v.chaine || "")} · ${v.clips.length} clips · ${esc(v.genere || "")}</div></div>
+        ${licence}
+      </div>
+      <div class="grid">${clips}</div>
+    </section>`;
+  }).join("");
+}
+
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button[data-titre]");
+  if (!b) return;
+  try { await navigator.clipboard.writeText(b.dataset.titre); b.textContent = "Copié ✓"; }
+  catch { b.textContent = "Copie impossible"; }
+  setTimeout(() => (b.textContent = "Copier le titre"), 1500);
+});
+
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  $("go").disabled = true;
+  const r = await fetch("/api/generer", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: $("url").value, n: +$("n").value, rechoisir: $("rechoisir").checked }),
+  });
+  const j = await r.json();
+  if (!r.ok) {
+    $("erreur").hidden = false; $("erreur").textContent = j.erreur; $("go").disabled = false;
+    return;
+  }
+  dernierEtat = "en_cours";
+});
+
+chargerBiblio();
+rafraichirEtat();
+</script>
+</body>
+</html>
