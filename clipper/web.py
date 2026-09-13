@@ -81,6 +81,11 @@ def etat():
         return jsonify(dict(_job))
 
 
+@app.get("/api/info")
+def info():
+    return jsonify(telephone=f"http://{_ip_locale()}:{PORT}")
+
+
 @app.get("/api/videos")
 def videos():
     out = []
@@ -113,9 +118,22 @@ def _ip_locale() -> str:
         return "127.0.0.1"
 
 
+def _deja_lance() -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", PORT)) == 0
+
+
 if __name__ == "__main__":
+    if _deja_lance():
+        # double-clic sur le raccourci alors que la page tourne deja : on l'ouvre, c'est tout
+        print(f"Clipper tourne deja : http://localhost:{PORT}")
+        if "--no-browser" not in sys.argv:
+            webbrowser.open(f"http://localhost:{PORT}")
+        sys.exit(0)
     P.OUT.mkdir(exist_ok=True)
-    print(f"\n  Clipper pret :  http://localhost:{PORT}")
+    print("\n  Garde cette fenetre ouverte (ou reduite) : la fermer arrete Clipper.")
+    print(f"  Clipper pret :  http://localhost:{PORT}")
     print(f"  Depuis le telephone (meme Wi-Fi) :  http://{_ip_locale()}:{PORT}\n")
     if "--no-browser" not in sys.argv:
         threading.Timer(1.0, lambda: webbrowser.open(f"http://localhost:{PORT}")).start()

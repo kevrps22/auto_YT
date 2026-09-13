@@ -18,6 +18,9 @@
   header h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
   header h1 span { color: var(--accent); }
   header p { margin: 0; color: var(--dim); }
+  header { flex-wrap: wrap; }
+  header .tel { margin-left: auto; font-size: 13px; }
+  header .tel b { color: var(--txt); font-weight: 600; user-select: all; }
 
   .card { background: var(--panel); border: 1px solid var(--line);
           border-radius: var(--radius); padding: 18px; margin-bottom: 18px; }
@@ -95,6 +98,7 @@
   <header>
     <h1>Clip<span>per</span></h1>
     <p>Des Shorts à partir d'une vidéo YouTube</p>
+    <p class="tel" id="tel"></p>
   </header>
 
   <div class="card">
@@ -237,6 +241,9 @@ $("form").addEventListener("submit", async (ev) => {
   dernierEtat = "en_cours";
 });
 
+fetch("/api/info").then((r) => r.json()).then((i) => {
+  $("tel").innerHTML = `Sur ton téléphone (même Wi-Fi) : <b>${esc(i.telephone)}</b>`;
+}).catch(() => {});
 chargerBiblio();
 rafraichirEtat();
 </script>
