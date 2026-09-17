@@ -21,6 +21,7 @@ Ce qu'on a appris en comparant avec 11 clips Opus Clip de la meme video :
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -42,8 +43,11 @@ HOOK_Y = 170                         # encadre d'accroche
 HOOK_DUR = 3.2                       # l'accroche disparait apres l'ouverture, comme chez Opus
 CAP_Y = 1540                         # ligne de base des sous-titres (hors zone de l'interface Shorts)
 WORDS_PER_CAP = 3
-CAP_FONT = "Segoe UI Black"          # police systeme Windows, lue par libass via DirectWrite
-HOOK_FONT = "Segoe UI Bold"
+# Polices EMBARQUEES dans fonts/ (licence OFL) : Segoe UI n'existe que sous Windows,
+# et le rendu doit etre identique sur le PC et sur les serveurs Linux de GitHub.
+FONTS_DIR = ROOT / "fonts"
+CAP_FONT = "Montserrat Black"
+HOOK_FONT = "Montserrat"                # graisse Bold, activee dans le style
 ACTIVE = r"&H0020B0FF&"              # mot prononce : orange-jaune (#FFB020, ASS en BGR)
 SCENE_SEUIL = 0.30                   # sensibilite de la detection de changement d'image
 # mots d'amorce qu'un monteur coupe en debut d'extrait
@@ -300,7 +304,7 @@ def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str 
         f"Style: Cap,{CAP_FONT},86,&H00FFFFFF,&H00FFFFFF,&H00101010,&H96000000,0,0,0,0,100,100,"
         "0,0,1,6,4,2,80,80,0,1\n"
         # BorderStyle 3 : fond opaque (couleur de contour) derriere le texte
-        f"Style: Hook,{HOOK_FONT},70,&H00141414,&H00141414,&H00FFFFFF,&H00FFFFFF,0,0,0,0,100,100,"
+        f"Style: Hook,{HOOK_FONT},66,&H00141414,&H00141414,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,"
         "0,0,3,22,0,8,170,170,0,1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
@@ -338,17 +342,20 @@ def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str 
 def rendre(src: Path, s: float, e: float, ass: Path, dst: Path) -> None:
     fg_h = int(round(W / (16 / 9 * SRC_CROP_W) / 2) * 2)
     ass_ff = str(ass).replace("\\", "/").replace(":", r"\:")
+    fonts_ff = str(FONTS_DIR).replace("\\", "/").replace(":", r"\:")
     fc = (
         # fond : la video elle-meme, agrandie, floutee et legerement assombrie
         f"[0:v]scale=-2:{H},crop={W}:{H},boxblur=30:2,eq=brightness=-0.08:saturation=1.1[bg];"
         # premier plan : le carre central de la source, en pleine largeur
         f"[0:v]crop=iw*{SRC_CROP_W}:ih,scale={W}:{fg_h}:flags=lanczos[fg];"
         # pas de fps=30 : on garde les 60 i/s de la source, comme Opus
-        f"[bg][fg]overlay=(W-w)/2:{FG_Y},subtitles='{ass_ff}'[v]"
+        f"[bg][fg]overlay=(W-w)/2:{FG_Y},subtitles='{ass_ff}':fontsdir='{fonts_ff}'[v]"
     )
     cmd = ["ffmpeg", "-y", "-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", str(src),
            "-filter_complex", fc, "-map", "[v]", "-map", "0:a",
-           "-c:v", "libx264", "-crf", "17", "-preset", "medium", "-pix_fmt", "yuv420p",
+           # preset reglable : les machines a 2 coeurs de GitHub passent en "fast"
+           "-c:v", "libx264", "-crf", "17",
+           "-preset", os.environ.get("CLIPPER_X264_PRESET", "medium"), "-pix_fmt", "yuv420p",
            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dst)]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode:
@@ -361,6 +368,27 @@ def slug(t: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", t).strip("-")[:50]
 
 
+def publiable(info: dict) -> bool:
+    """Seule une source sous licence Creative Commons peut etre republiee sans accord.
+    L'Orange Pi refuse de publier un clip marque non publiable."""
+    return "creative" in (info.get("licence") or "").lower()
+
+
+def description(clip: dict, info: dict) -> str:
+    """Description YouTube avec le credit exige par la licence CC BY. Sans elle, la
+    licence n'est pas respectee et le createur peut faire retirer la video : les deux
+    premiers clips Thinkerview ont ete publies avec une description vide."""
+    lignes = [clip.get("accroche_ecran") or clip.get("titre", ""), ""]
+    lignes.append(f"Extrait de « {info.get('titre', '')} », par {info.get('chaine', '')}.")
+    if info.get("url"):
+        lignes.append(f"Vidéo originale : {info['url']}")
+    if publiable(info):
+        lignes.append("Licence : Creative Commons Attribution (CC BY)")
+    else:
+        lignes.append("Licence YouTube standard : ne pas publier sans l'accord du créateur.")
+    return "\n".join(lignes).strip()
+
+
 def produire(src: Path, choix: list[dict], n: int, suivi=None) -> list[dict]:
     """Cale et rend les extraits choisis. Ecrit l'index `out/<id>.json` lu par la page
     locale. `suivi(i, total, clip)` est appele avant chaque rendu."""
@@ -371,6 +399,8 @@ def produire(src: Path, choix: list[dict], n: int, suivi=None) -> list[dict]:
     out.mkdir(exist_ok=True)
     for vieux in out.glob(f"{src.stem}_*"):       # un nouveau rendu remplace l'ancien
         vieux.unlink()
+    info_f = src.with_suffix(".info.json")
+    info = json.loads(info_f.read_text(encoding="utf-8")) if info_f.exists() else {"id": src.stem}
     pris: list[tuple[float, float]] = []
     rendus: list[dict] = []
     retenus = choix[:n]
@@ -393,10 +423,9 @@ def produire(src: Path, choix: list[dict], n: int, suivi=None) -> list[dict]:
         ass.unlink(missing_ok=True)
         rendus.append({"fichier": base.with_suffix(".mp4").name, "titre": c.get("titre", ""),
                        "accroche": c.get("accroche_ecran", ""), "score": c.get("score"),
-                       "debut": round(s, 2), "fin": round(e, 2), "duree": round(e - s, 1)})
-    info_f = src.with_suffix(".info.json")
-    info = json.loads(info_f.read_text(encoding="utf-8")) if info_f.exists() else {"id": src.stem}
-    index = {**info, "genere": __import__("time").strftime("%Y-%m-%d %H:%M"), "clips": rendus}
+                       "debut": round(s, 2), "fin": round(e, 2), "duree": round(e - s, 1),
+                       "description": description(c, info), "publiable": publiable(info)})
+    index ={**info, "genere": __import__("time").strftime("%Y-%m-%d %H:%M"), "clips": rendus}
     (out / f"{src.stem}.json").write_text(json.dumps(index, ensure_ascii=False, indent=1),
                                           encoding="utf-8")
     return rendus

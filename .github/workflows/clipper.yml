@@ -1,0 +1,99 @@
+# Clipper sur GitHub : transcription, choix des moments et rendu des Shorts.
+#
+# Ce workflow NE PUBLIE RIEN sur YouTube et n'utilise aucun secret YouTube.
+# - En entree, l'Orange Pi depose dans la release "clipper-<id>" la video <id>.mp4
+#   et sa fiche <id>.info.json : YouTube bloque les telechargements depuis GitHub.
+# - En sortie, les clips et leur index <id>.json sont ajoutes a la meme release.
+#   L'Orange Pi les recupere et publie depuis la maison (juillet 2026 : les
+#   publications faites depuis GitHub avaient ete bridees).
+name: Clipper
+run-name: Clipper ${{ inputs.video_id }}     # permet a l'Orange Pi de retrouver son rendu
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_id:
+        description: "Identifiant YouTube de la video source"
+        required: true
+      n:
+        description: "Nombre de clips"
+        default: "8"
+      rechoisir:
+        description: "Refaire le choix des moments meme s'il existe deja"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write            # lire et completer la release
+
+concurrency:
+  group: clipper             # un traitement a la fois : le quota est de 2 000 min/mois
+  cancel-in-progress: false
+
+jobs:
+  clips:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350     # limite dure de GitHub : 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VID: ${{ inputs.video_id }}
+      TAG: clipper-${{ inputs.video_id }}
+      N: ${{ inputs.n }}
+      RECHOISIR: ${{ inputs.rechoisir }}
+      CLIPPER_X264_PRESET: fast   # 2 coeurs seulement : "medium" doublerait le rendu
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: clipper/requirements-cloud.txt
+
+      - name: Installer ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Installer les dependances
+        run: pip install -q -r clipper/requirements-cloud.txt
+
+      - name: Modele de transcription en cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-small-v1
+
+      - name: Recuperer la video source
+        run: |
+          mkdir -p clipper/src
+          gh release download "$TAG" -D clipper/src -p "$VID.mp4" -p "$VID.info.json"
+          # caches d'un passage precedent : evitent de tout retranscrire
+          for f in "$VID.words.json" "$VID.scenes.txt" "$VID.clips.json"; do
+            gh release download "$TAG" -D clipper/src -p "$f" 2>/dev/null || true
+          done
+          if [ "$RECHOISIR" = "true" ]; then rm -f "clipper/src/$VID.clips.json"; fi
+          ls -la clipper/src
+
+      - name: Transcription et changements d'image
+        run: python -u clipper/cloud.py "$VID" --etape transcription
+
+      - name: Sauvegarder la transcription dans la release
+        if: always()
+        run: |
+          for f in "clipper/src/$VID.words.json" "clipper/src/$VID.scenes.txt"; do
+            if [ -f "$f" ]; then gh release upload "$TAG" "$f" --clobber; fi
+          done
+
+      - name: Choix des moments et rendu des clips
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python -u clipper/cloud.py "$VID" --etape rendu --n "$N"
+
+      - name: Deposer les clips dans la release
+        run: |
+          gh release upload "$TAG" clipper/out/"$VID"_*.mp4 "clipper/out/$VID.json" \
+            "clipper/src/$VID.clips.json" --clobber
+
+      - name: Supprimer la video source de la release
+        # elle ne sert plus, et chaque release la garderait indefiniment
+        run: gh release delete-asset "$TAG" "$VID.mp4" -y

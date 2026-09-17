@@ -1,0 +1,4 @@
+# Dependances de Clipper sur GitHub Actions (rendu uniquement, pas de publication)
+faster-whisper>=1.0.0
+google-genai>=1.0.0
+requests>=2.31.0

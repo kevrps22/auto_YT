@@ -94,7 +94,8 @@ def transcrire(src: Path, suivi: Suivi, langue: str = "fr") -> None:
     from faster_whisper import WhisperModel
     suivi("transcription", a, "chargement du modele")
     if _modele is None:                       # charge une seule fois pour toute la session
-        _modele = WhisperModel("small", device="cpu", compute_type="int8")
+        _modele = WhisperModel("small", device="cpu", compute_type="int8",
+                               cpu_threads=os.cpu_count() or 4)
     segs, info = _modele.transcribe(str(src), language=langue, word_timestamps=True,
                                     vad_filter=True, beam_size=5)
     words = []
@@ -111,12 +112,24 @@ def transcrire(src: Path, suivi: Suivi, langue: str = "fr") -> None:
 def traiter(url: str, n: int, suivi: Suivi, rechoisir: bool = False) -> dict:
     assurer_ffmpeg()
     src, meta = telecharger(url, suivi)
-    transcrire(src, suivi)
+    return traiter_fichier(src, meta, n, suivi, rechoisir)
 
+
+def preparer(src: Path, suivi: Suivi) -> list[float]:
+    """Transcription et changements d'image : la partie longue, sans appel reseau."""
+    transcrire(src, suivi)
     a, b = _borne("images")
     suivi("images", a, "detection des changements d'image")
     cuts = C.scenes(src)
     suivi("images", b, f"{len(cuts)} changements d'image")
+    return cuts
+
+
+def traiter_fichier(src: Path, meta: dict, n: int, suivi: Suivi,
+                    rechoisir: bool = False) -> dict:
+    """Tout ce qui suit le telechargement. Sur GitHub, la video arrive deja
+    telechargee depuis l'adresse de la maison : YouTube bloque les serveurs."""
+    preparer(src, suivi)
 
     a, b = _borne("choix")
     suivi("choix", a, "Gemini lit la transcription")
