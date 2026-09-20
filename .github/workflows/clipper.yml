@@ -66,7 +66,14 @@ jobs:
       - name: Recuperer la video source
         run: |
           mkdir -p clipper/src
-          gh release download "$TAG" -D clipper/src -p "$VID.mp4" -p "$VID.info.json"
+          gh release download "$TAG" -D clipper/src -p "$VID.info.json"
+          # la source arrive entiere, ou en tranches de 100 Mo (GitHub refusait les
+          # envois d'un seul tenant : erreur 500 en fin de transfert)
+          if ! gh release download "$TAG" -D clipper/src -p "$VID.mp4" 2>/dev/null; then
+            gh release download "$TAG" -D clipper/src -p "$VID.mp4.part*"
+            cat clipper/src/"$VID".mp4.part* > "clipper/src/$VID.mp4"
+            rm -f clipper/src/"$VID".mp4.part*
+          fi
           # caches d'un passage precedent : evitent de tout retranscrire
           for f in "$VID.words.json" "$VID.scenes.txt" "$VID.clips.json"; do
             gh release download "$TAG" -D clipper/src -p "$f" 2>/dev/null || true
@@ -96,4 +103,7 @@ jobs:
 
       - name: Supprimer la video source de la release
         # elle ne sert plus, et chaque release la garderait indefiniment
-        run: gh release delete-asset "$TAG" "$VID.mp4" -y
+        run: |
+          gh release view "$TAG" --json assets --jq '.assets[].name' \
+            | grep -E "^$VID\.mp4(\.part[0-9]+)?$" \
+            | while read -r a; do gh release delete-asset "$TAG" "$a" -y; done

@@ -69,17 +69,93 @@ def release(vid: str, titre: str = "") -> dict:
                 "c'est l'Orange Pi qui publie, depuis la maison."}).json()
 
 
-def deposer(rel: dict, fichier: Path) -> None:
-    for a in rel.get("assets", []):                  # remplace un fichier du meme nom
-        if a["name"] == fichier.name:
+# Au-dela de cette taille, GitHub a renvoye une erreur 500 « Error saving asset »
+# APRES dix minutes de transfert. On decoupe donc, et une tranche ratee se refait
+# seule sans tout reprendre. Le workflow recolle les tranches avec `cat`.
+TRANCHE_MAX = 100 * 1024 * 1024
+
+
+class _Tranche:
+    """Portion de fichier lue par morceaux, avec avancement. La taille est exposee
+    pour que requests envoie un Content-Length, exige par GitHub."""
+
+    def __init__(self, chemin: Path, debut: int, longueur: int, etiquette: str = ""):
+        self.f = chemin.open("rb")
+        self.f.seek(debut)
+        self.taille = self.reste = longueur
+        self.lu, self.palier, self.t0, self.etiquette = 0, 20, time.time(), etiquette
+
+    def __len__(self) -> int:
+        return self.taille
+
+    def read(self, n: int = -1) -> bytes:
+        if self.reste <= 0:
+            return b""
+        bloc = self.f.read(min(n if n and n > 0 else 1 << 20, self.reste))
+        self.reste -= len(bloc)
+        self.lu += len(bloc)
+        pct = 100 * self.lu // max(1, self.taille)
+        if pct >= self.palier:
+            self.palier = (pct // 20 + 1) * 20
+            debit = self.lu / 1e6 / max(0.1, time.time() - self.t0)
+            print(f"    {self.etiquette}{pct:3d} %  ({debit:.1f} Mo/s)", flush=True)
+        return bloc
+
+    def close(self) -> None:
+        self.f.close()
+
+
+def _assets(rel: dict) -> list[dict]:
+    """Tous les fichiers de la release, y compris ceux d'un envoi INTERROMPU : ils y
+    restent a l'etat "starter", absents de rel["assets"], et bloquent le meme nom."""
+    return _api("GET", f"/releases/{rel['id']}/assets", params={"per_page": 100}).json()
+
+
+def _supprimer(rel: dict, nom: str) -> None:
+    for a in _assets(rel):
+        if a["name"] == nom:
             _api("DELETE", f"/releases/assets/{a['id']}")
-    url = rel["upload_url"].split("{")[0]
+
+
+def _envoyer(rel: dict, nom: str, fichier: Path, debut: int, longueur: int,
+             etiquette: str = "") -> None:
+    for essai in range(1, 4):
+        corps = _Tranche(fichier, debut, longueur, etiquette)
+        try:
+            _api("POST", rel["upload_url"].split("{")[0], params={"name": nom}, data=corps,
+                 timeout=None, headers={"Content-Type": "application/octet-stream"})
+            return
+        except (RuntimeError, requests.RequestException) as e:
+            print(f"    echec ({str(e)[:90]}) -> essai {essai}/3", flush=True)
+            _supprimer(rel, nom)                      # une tranche incomplete bloquerait le nom
+            time.sleep(5 * essai)
+        finally:
+            corps.close()
+    raise RuntimeError(f"Envoi impossible apres 3 essais : {nom}")
+
+
+def deposer(rel: dict, fichier: Path) -> None:
     taille = fichier.stat().st_size
-    print(f"  envoi {fichier.name} ({taille / 1e6:.0f} Mo)...", flush=True)
+    if taille <= TRANCHE_MAX:
+        _supprimer(rel, fichier.name)
+        print(f"  envoi {fichier.name} ({taille / 1e6:.0f} Mo)...", flush=True)
+        t0 = time.time()
+        _envoyer(rel, fichier.name, fichier, 0, taille)
+        print(f"  envoye en {time.time() - t0:.0f} s", flush=True)
+        return
+    n = -(-taille // TRANCHE_MAX)
+    deja = {a["name"]: a for a in _assets(rel) if a["state"] == "uploaded"}
+    print(f"  envoi {fichier.name} ({taille / 1e6:.0f} Mo) en {n} tranches", flush=True)
     t0 = time.time()
-    with fichier.open("rb") as f:
-        _api("POST", url, params={"name": fichier.name}, data=f, timeout=None,
-             headers={"Content-Type": "application/octet-stream"})
+    for i in range(n):
+        nom = f"{fichier.name}.part{i + 1:02d}"
+        longueur = min(TRANCHE_MAX, taille - i * TRANCHE_MAX)
+        if deja.get(nom, {}).get("size") == longueur:      # reprise apres un echec
+            print(f"    [{i + 1}/{n}] deja envoyee", flush=True)
+            continue
+        _supprimer(rel, nom)
+        _envoyer(rel, nom, fichier, i * TRANCHE_MAX, longueur, f"[{i + 1}/{n}] ")
+    _supprimer(rel, fichier.name)                          # l'entier ne doit pas trainer
     print(f"  envoye en {time.time() - t0:.0f} s", flush=True)
 
 
