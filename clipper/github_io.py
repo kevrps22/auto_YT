@@ -26,6 +26,7 @@ import requests
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import clipper as C  # noqa: E402  (dossiers du projet)
 
 DEPOT = os.environ.get("GITHUB_REPO", "kevrps22/auto_YT")
 API = f"https://api.github.com/repos/{DEPOT}"
@@ -207,7 +208,7 @@ def suivre(vid: str, pause: int = 60) -> dict:
 
 
 def recuperer(vid: str, dest: Path | None = None) -> dict:
-    dest = dest or HERE / "out"
+    dest = dest or C.OUT
     dest.mkdir(parents=True, exist_ok=True)
     rel = _api("GET", f"/releases/tags/clipper-{vid}")
     if rel.status_code == 404:
@@ -257,12 +258,12 @@ def main() -> int:
         run = suivre(vid)
         if run["conclusion"] == "success":
             index = recuperer(vid)
-            print(f"{len(index['clips'])} clips dans clipper/out")
+            print(f"{len(index['clips'])} clips dans media/out")
     elif cmd == "suivre":
         suivre(arg)
     elif cmd == "recuperer":
         index = recuperer(arg)
-        print(f"{len(index['clips'])} clips dans clipper/out")
+        print(f"{len(index['clips'])} clips dans media/out")
     else:
         print(__doc__)
         return 2

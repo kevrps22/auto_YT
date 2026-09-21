@@ -1,64 +1,84 @@
-# YouTube Shorts Bot (gratuit)
+# Attends Quoi ?! — fabrique de Shorts
 
-Genere des Shorts "le saviez-vous" et les publie automatiquement, 100% avec des outils gratuits.
+Découpe des vidéos longues sous licence libre en Shorts, et les remonte en vidéos
+explicatives. Chaîne : [@Attends_Quoi](https://www.youtube.com/@Attends_Quoi).
 
-`sujet -> script (Gemini) -> voix FR (edge-tts) -> visuels (Pexels) -> montage (FFmpeg) -> upload (YouTube API)`
+`lien YouTube → transcription → choix des moments (Gemini) → clips verticaux → montage explicatif`
 
-## 1. Tester en local (sans rien payer)
+Tout tourne avec des outils gratuits : Gemini, Pexels, FFmpeg, faster-whisper,
+GitHub Actions. Aucun abonnement, aucune carte bancaire.
+
+## Organisation
+
+```
+auto_YT/
+├─ clipper/          le cœur
+│   ├─ clipper.py       découpe : calage image + phrase, sous-titres, rendu
+│   ├─ habiller.py      remonte un clip en vidéo explicative (la voix est gardée)
+│   ├─ pipeline.py      enchaîne téléchargement → transcription → choix → rendu
+│   ├─ transcribe.py    transcription mot à mot (faster-whisper)
+│   ├─ cloud.py         point d'entrée du rendu sur GitHub
+│   ├─ github_io.py     déposer une source, lancer, suivre, récupérer
+│   └─ web.py + web/    page locale (port 8765), utilisable depuis le téléphone
+├─ youtube/          publication et mesure
+│   ├─ upload.py        envoi OAuth (YouTube Data API v3)
+│   ├─ daily_upload.py  publie une vidéo par jour
+│   ├─ analytics.py     rétention réelle seconde par seconde, APV
+│   └─ dashboard.py     tableau de bord local des statistiques
+├─ assets/           polices (Montserrat, OFL) et musique de fond
+├─ media/            sources, clips, rendus — hors dépôt, des gigaoctets
+├─ docs/             ARCHITECTURE.md (décisions, mesures) · ETAT.md (reprise)
+└─ app/              « YT Studio », application Flutter Windows
+```
+
+## Installation
 
 ```bash
-# Pre-requis : Python 3.11+ et FFmpeg installes (ffmpeg dans le PATH)
 pip install -r requirements.txt
-
-# Test montage seul (sans cles API -> script d'exemple + fond noir)
-python generate.py "les trous noirs"
-# -> output/short.mp4
 ```
 
-Ca doit deja produire une video avec voix FR + sous-titres. Ajoute ensuite les cles :
+FFmpeg doit être installé et dans le PATH : `winget install Gyan.FFmpeg`.
 
-- **GEMINI_API_KEY** : gratuit sur https://aistudio.google.com/apikey
-- **PEXELS_API_KEY** : gratuit sur https://www.pexels.com/api/
+Trois fichiers ne sont jamais commités et sont à recréer sur une nouvelle machine
+— voir [docs/ETAT.md](docs/ETAT.md) : `.env`, `client_secret.json`, `token.json`.
+
+## Utilisation
+
+La page locale fait tout, à partir d'un lien YouTube :
 
 ```bash
-# Windows PowerShell
-$env:GEMINI_API_KEY="..."; $env:PEXELS_API_KEY="..."; python generate.py "les oceans"
+python clipper/web.py
 ```
 
-## 2. Brancher l'upload YouTube (une fois)
+En ligne de commande, sur une source déjà téléchargée dans `media/src` :
 
-1. https://console.cloud.google.com -> nouveau projet -> active **YouTube Data API v3**
-2. Ecran de consentement OAuth -> type **Desktop** -> telecharge `client_secret.json` ici
-3. `python upload.py --auth`  (autorise dans le navigateur -> cree `token.json`)
-4. `python upload.py`  (publie output/short.mp4)
+```bash
+python clipper/clipper.py media/src/ID.mp4 --n 8 --titre "titre de la source"
+```
 
-## 3. Automatiser avec GitHub Actions (gratuit, cron)
+Rendu sur GitHub (le téléchargement reste ici, YouTube bloque les serveurs) :
 
-1. Push ce dossier sur un repo GitHub **prive**.
-2. Settings -> Secrets and variables -> Actions -> ajoute :
-   - `GEMINI_API_KEY`, `PEXELS_API_KEY`
-   - `YT_CLIENT_SECRET` (contenu de client_secret.json)
-   - `YT_TOKEN` (contenu de token.json)
-3. Le workflow `.github/workflows/daily.yml` lance 1 video/jour a 9h UTC.
-   Onglet **Actions** -> "Run workflow" pour tester tout de suite.
+```bash
+python clipper/github_io.py envoyer "https://www.youtube.com/watch?v=ID" --n 8
+```
 
-## Habillage (intro / outro / musique)
+Remonter un clip en vidéo explicative :
 
-Tout se regle en haut de `generate.py` :
+```bash
+python clipper/habiller.py ID --clip 7
+```
 
-- **Intro animee** : le titre apparait au centre avec un zoom+fondu (`LEAD` = duree avant la voix).
-- **Outro** : carte de fin `OUTRO_TEXT` + fondu, pour ne pas couper net (`TAIL` = duree de fin).
-- **Sous-titres karaoke** : police Anton (`fonts/`), mot surligne en jaune (`&H0000E5FF`).
-- **Musique de fond** : depose un/des `.mp3` dans `music/` -> choix aleatoire, volume `MUSIC_VOL`,
-  avec *ducking* (la musique baisse quand la voix parle) + fondus. Si `music/` est vide, pas de musique.
-  Sources gratuites : YouTube Audio Library, Pixabay Music, Freesound (CC0).
-- **Fondus** video ouverture/fermeture automatiques.
+Lire les vraies courbes de rétention :
 
-`fonts/` et `music/` sont commites -> GitHub Actions les utilise aussi.
+```bash
+python youtube/analytics.py --hook
+```
 
-## Notes
+## Trois règles apprises à la dure
 
-- `.gitignore` protege tes cles : ne commit jamais `client_secret.json` ni `token.json`.
-- Politique YouTube : vise la qualite, pas 50 videos/jour clonees (demonetisation).
-- Voix : change `VOICE` (`fr-FR-VivienneMultilingualNeural` = feminine naturelle),
-  `RATE`/`PITCH` pour le rythme.
+- **Une vidéo par jour, publiée depuis la maison.** Les envois faits depuis les
+  serveurs GitHub ont fait brider la chaîne, et le lot programmé d'août 2026 a
+  divisé les vues par quatre — le contenu n'y était pour rien.
+- **Sources en Creative Commons uniquement**, crédit dans la description. Les
+  clips issus d'une autre licence sont marqués non publiables par `publiable()`.
+- **Ne jamais juger une vidéo avant 48 h.** Les vues arrivent par vagues.

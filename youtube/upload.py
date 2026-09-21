@@ -32,8 +32,10 @@ from googleapiclient.http import MediaFileUpload
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
           "https://www.googleapis.com/auth/yt-analytics.readonly",
           "https://www.googleapis.com/auth/youtube.readonly"]
-TOKEN = Path("token.json")
-CLIENT = Path("client_secret.json")
+# a la racine du projet, pas dans youtube/ : ils servent aussi a analytics.py
+RACINE = Path(__file__).resolve().parent.parent
+TOKEN = RACINE / "token.json"
+CLIENT = RACINE / "client_secret.json"
 
 
 def _write_from_env():

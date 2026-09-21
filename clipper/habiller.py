@@ -27,7 +27,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import clipper as C  # noqa: E402
 
-SORTIE = HERE / "out_habille"
+SORTIE = C.OUT_HABILLE
 FOND = "0x0E1015"                    # fond des cartes typographiques
 ACCENT = "0xFFB020"                  # meme orange que le mot prononce des sous-titres
 SCENE_MIN, SCENE_MAX = 2.2, 6.0
@@ -38,7 +38,7 @@ ACTIONS = {"spinning", "driving", "pouring", "falling", "moving", "flowing", "wo
 CARTE_Y = 820                        # hauteur du texte des cartes (au-dessus des sous-titres)
 # eclat blanc de 1 a 2 images a chaque coupe : les changements de plan etaient secs
 FLASH = ",fade=t=in:st=0:d=0.05:color=white,"
-MUSIQUE = C.ROOT / "music" / "bg.mp3"
+MUSIQUE = C.ROOT / "assets" / "music" / "bg.mp3"
 VOL_MUSIQUE = 0.10                   # lit les silences sans jamais couvrir la voix
 VOL_SFX = 0.55
 
@@ -283,8 +283,8 @@ def piste_basse(duree: float, dst: Path) -> None:
 
 # ------------------------------------------------------------------ assemblage
 def habiller(vid: str, numero: int, replan: bool = False) -> Path:
-    src = HERE / "src" / f"{vid}.mp4"
-    index = json.loads((HERE / "out" / f"{vid}.json").read_text(encoding="utf-8"))
+    src = C.SRC / f"{vid}.mp4"
+    index = json.loads((C.OUT / f"{vid}.json").read_text(encoding="utf-8"))
     choix = json.loads(src.with_suffix(".clips.json").read_text(encoding="utf-8"))
     clip = choix[numero - 1]
     mots = C.recoller(json.loads(src.with_suffix(".words.json").read_text(encoding="utf-8")))

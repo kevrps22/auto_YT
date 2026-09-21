@@ -29,14 +29,14 @@ from pathlib import Path
 
 import requests
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).resolve().parent.parent   # racine du projet
 LOG = HERE / "upload.log"
 
 
 # ------------------------------------------------------------------ utilitaires
 def load_env() -> None:
-    """Lit le .env local. Volontairement autonome : importer generate.py creerait
-    un dossier temporaire inutile et ajouterait une dependance sur le Pi."""
+    """Lit le .env local. Volontairement autonome : aucune dependance sur le
+    reste du projet, pour tourner tel quel sur l'Orange Pi."""
     f = HERE / ".env"
     if not f.exists():
         return

@@ -3,7 +3,7 @@
     python clipper/cloud.py <id> --etape transcription
     python clipper/cloud.py <id> --etape rendu --n 8
 
-La video `clipper/src/<id>.mp4` et sa fiche `<id>.info.json` sont deposees par
+La video `media/src/<id>.mp4` et sa fiche `<id>.info.json` sont deposees par
 l'Orange Pi : YouTube bloque les telechargements depuis les serveurs de GitHub.
 
 Deux etapes separees, car une tache GitHub est coupee au bout de 6 heures : le

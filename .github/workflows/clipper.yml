@@ -65,21 +65,21 @@ jobs:
 
       - name: Recuperer la video source
         run: |
-          mkdir -p clipper/src
-          gh release download "$TAG" -D clipper/src -p "$VID.info.json"
+          mkdir -p media/src
+          gh release download "$TAG" -D media/src -p "$VID.info.json"
           # la source arrive entiere, ou en tranches de 100 Mo (GitHub refusait les
           # envois d'un seul tenant : erreur 500 en fin de transfert)
-          if ! gh release download "$TAG" -D clipper/src -p "$VID.mp4" 2>/dev/null; then
-            gh release download "$TAG" -D clipper/src -p "$VID.mp4.part*"
-            cat clipper/src/"$VID".mp4.part* > "clipper/src/$VID.mp4"
-            rm -f clipper/src/"$VID".mp4.part*
+          if ! gh release download "$TAG" -D media/src -p "$VID.mp4" 2>/dev/null; then
+            gh release download "$TAG" -D media/src -p "$VID.mp4.part*"
+            cat media/src/"$VID".mp4.part* > "media/src/$VID.mp4"
+            rm -f media/src/"$VID".mp4.part*
           fi
           # caches d'un passage precedent : evitent de tout retranscrire
           for f in "$VID.words.json" "$VID.scenes.txt" "$VID.clips.json"; do
-            gh release download "$TAG" -D clipper/src -p "$f" 2>/dev/null || true
+            gh release download "$TAG" -D media/src -p "$f" 2>/dev/null || true
           done
-          if [ "$RECHOISIR" = "true" ]; then rm -f "clipper/src/$VID.clips.json"; fi
-          ls -la clipper/src
+          if [ "$RECHOISIR" = "true" ]; then rm -f "media/src/$VID.clips.json"; fi
+          ls -la media/src
 
       - name: Transcription et changements d'image
         run: python -u clipper/cloud.py "$VID" --etape transcription
@@ -87,7 +87,7 @@ jobs:
       - name: Sauvegarder la transcription dans la release
         if: always()
         run: |
-          for f in "clipper/src/$VID.words.json" "clipper/src/$VID.scenes.txt"; do
+          for f in "media/src/$VID.words.json" "media/src/$VID.scenes.txt"; do
             if [ -f "$f" ]; then gh release upload "$TAG" "$f" --clobber; fi
           done
 
@@ -98,8 +98,8 @@ jobs:
 
       - name: Deposer les clips dans la release
         run: |
-          gh release upload "$TAG" clipper/out/"$VID"_*.mp4 "clipper/out/$VID.json" \
-            "clipper/src/$VID.clips.json" --clobber
+          gh release upload "$TAG" media/out/"$VID"_*.mp4 "media/out/$VID.json" \
+            "media/src/$VID.clips.json" --clobber
 
       - name: Supprimer la video source de la release
         # elle ne sert plus, et chaque release la garderait indefiniment

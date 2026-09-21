@@ -1,39 +1,30 @@
-output/
+# --- secrets (jamais commites) ---
+.env
+client_secret.json
+token.json
+
+# --- medias : des gigaoctets de video, tout est regenerable ---
+media/
+
+# --- journaux et fichiers generes ---
+*.log
 dashboard.html
 history.json
-.env
 
-# --- app Flutter (artefacts generes, recrees par `flutter build`) ---
+# --- archives et copies de sauvegarde locales ---
+*.rar
+*.zip
+* - Copie/
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+.probe_cache/
+
+# --- app Flutter : artefacts recrees par `flutter build` ---
 app/build/
 app/.dart_tool/
 app/windows/flutter/ephemeral/
 app/.flutter-plugins*
 *.iml
-client_secret.json
-token.json
-__pycache__/
-*.pyc
-.venv/
-
-# --- studio personnage ---
-work_char/
-characters/
-
-# --- journaux d'execution ---
-*.log
-batch.err
-
-# --- artefacts de test / modeles telechargeables ---
-voices/
-sample_*.wav
-_test_*.py
-.probe_cache/
-probe.log
-dbg.log
-
-# --- clipper : medias sources et rendus (lourds, jamais commites) ---
-clipper/src/
-clipper/out/
-clipper/*.log
-clipper/opus/
-clipper/out_habille/

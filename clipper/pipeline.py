@@ -2,7 +2,7 @@
 
 Utilisee par la page locale (web.py). Chaque etape deja faite pour une video est
 sautee : telechargement, transcription et changements d'image restent en cache
-dans clipper/src, donc relancer une video ne coute que le choix et le rendu.
+dans media/src, donc relancer une video ne coute que le choix et le rendu.
 """
 from __future__ import annotations
 
@@ -14,8 +14,7 @@ from typing import Callable
 
 import clipper as C
 
-SRC = C.HERE / "src"
-OUT = C.HERE / "out"
+SRC, OUT = C.SRC, C.OUT
 Suivi = Callable[[str, float, str], None]     # (etape, avancement global 0-1, detail)
 
 # part de la duree totale attribuee a chaque etape, pour une barre qui avance regulierement

@@ -1,7 +1,7 @@
 """Decoupe une video longue en Shorts, facon Opus Clip.
 
-    python clipper/transcribe.py clipper/src/<id>.mp4       1. transcription (une fois)
-    python clipper/clipper.py clipper/src/<id>.mp4 --n 8     2. choix + rendu
+    python clipper/transcribe.py media/src/<id>.mp4       1. transcription (une fois)
+    python clipper/clipper.py media/src/<id>.mp4 --n 8     2. choix + rendu
         --titre "..."   titre de la video source (aide Gemini)
         --rechoisir     redemande le choix des moments a Gemini
 
@@ -63,9 +63,15 @@ HOOK_Y = 170                         # encadre d'accroche
 HOOK_DUR = 3.2                       # l'accroche disparait apres l'ouverture, comme chez Opus
 CAP_Y = 1540                         # ligne de base des sous-titres (hors zone de l'interface Shorts)
 WORDS_PER_CAP = 3
-# Polices EMBARQUEES dans fonts/ (licence OFL) : Segoe UI n'existe que sous Windows,
+# Polices EMBARQUEES dans assets/fonts/ (licence OFL) : Segoe UI n'existe que sous Windows,
 # et le rendu doit etre identique sur le PC et sur les serveurs Linux de GitHub.
-FONTS_DIR = ROOT / "fonts"
+# Dossiers du projet : le code dans clipper/, les polices et la musique dans
+# assets/, les videos dans media/ (hors Git, ce sont des gigaoctets).
+FONTS_DIR = ROOT / "assets" / "fonts"
+MEDIA = ROOT / "media"
+SRC = MEDIA / "src"                  # sources telechargees + transcriptions
+OUT = MEDIA / "out"                  # clips bruts + index par video
+OUT_HABILLE = MEDIA / "out_habille"  # clips remontes en video explicative
 CAP_FONT = "Montserrat Black"
 HOOK_FONT = "Montserrat"                # graisse Bold, activee dans le style
 ACTIVE = r"&H0020B0FF&"              # mot prononce : orange-jaune (#FFB020, ASS en BGR)
