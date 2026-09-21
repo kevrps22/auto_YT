@@ -206,6 +206,10 @@ def piste_sfx(impacts: list[tuple[float, str]], duree: float, dst: Path) -> None
             x = np.arange(n) / sr
             f = 110 * np.exp(-x * 3.2) + 45
             son = np.sin(2 * np.pi * f * x) * np.exp(-x * 6.0) * 0.6
+        elif genre == "clic":                     # petit pop sur l'apparition d'un mot
+            n = int(0.05 * sr)
+            x = np.arange(n) / sr
+            son = (np.sin(2 * np.pi * 1800 * x) * np.exp(-x * 90.0) * 0.10).astype(np.float32)
         else:                                     # souffle : bruit filtre, montee-descente
             n = int(0.35 * sr)
             x = np.arange(n) / sr
@@ -221,6 +225,60 @@ def piste_sfx(impacts: list[tuple[float, str]], duree: float, dst: Path) -> None
         w.setsampwidth(2)
         w.setframerate(sr)
         w.writeframes((piste * 32767).astype("<i2").tobytes())
+
+
+def _ecrire_wav(piste, dst: Path, sr: int = 48000) -> None:
+    import numpy as np
+    import wave
+    with wave.open(str(dst), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((np.clip(piste, -1, 1) * 32767).astype("<i2").tobytes())
+
+
+def piste_ambiance(plans: list[tuple[float, float, Path]], duree: float, dst: Path) -> None:
+    """Son d'ambiance des plans d'illustration : beaucoup de videos Pexels portent leur
+    propre son (circulation, vent, machines). On le reprend tres bas, adouci et fondu."""
+    import numpy as np
+
+    sr = 48000
+    piste = np.zeros(int((duree + 1.0) * sr), dtype=np.float32)
+    for t, d, source in plans:
+        r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(source), "-t", f"{d + 0.5:.2f}",
+                            "-vn", "-ac", "1", "-ar", str(sr), "-f", "s16le", "-"],
+                           capture_output=True)
+        if len(r.stdout) < sr:                    # clip muet : rien a reprendre
+            continue
+        son = np.frombuffer(r.stdout, dtype="<i2").astype(np.float32) / 32768
+        son = np.convolve(son, np.ones(6, np.float32) / 6, mode="same")   # adoucit les aigus
+        n = min(len(son), int(d * sr))
+        env = np.ones(n, dtype=np.float32)
+        f = min(int(0.4 * sr), n // 2)
+        env[:f], env[n - f:] = np.linspace(0, 1, f), np.linspace(1, 0, f)
+        i = int(t * sr)
+        fin = min(len(piste), i + n)
+        piste[i:fin] += son[: fin - i] * env[: fin - i] * 0.22
+    _ecrire_wav(piste, dst)
+
+
+def piste_basse(duree: float, dst: Path) -> None:
+    """Ligne de basse synthetisee : une pulsation grave toutes les 1,2 s sur un bourdon.
+    C'est ce qui tient l'oreille entre deux phrases, sans melodie qui distrairait."""
+    import numpy as np
+
+    sr = 48000
+    x = np.arange(int((duree + 1.0) * sr)) / sr
+    bourdon = np.sin(2 * np.pi * 41 * x) * 0.05
+    piste = bourdon.astype(np.float32)
+    for k in range(int(duree / 1.2) + 1):
+        i = int(k * 1.2 * sr)
+        n = int(0.9 * sr)
+        u = np.arange(n) / sr
+        note = np.sin(2 * np.pi * 55 * u) * np.exp(-u * 3.5) * 0.16
+        fin = min(len(piste), i + n)
+        piste[i:fin] += note[: fin - i].astype(np.float32)
+    _ecrire_wav(piste, dst)
 
 
 # ------------------------------------------------------------------ assemblage
@@ -250,7 +308,7 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
     base = SORTIE / f"{vid}_{numero}_{C.slug(clip['titre'])}_explique"
     with tempfile.TemporaryDirectory() as tmp:
         travail = Path(tmp)
-        segments, impacts, t = [], [], 0.0
+        segments, impacts, ambiances, t = [], [], [], 0.0
         for i, sc in enumerate(plan):
             fin = min(float(sc.get("fin", t + 4)), duree)
             d = max(1.2, fin - t)
@@ -264,6 +322,7 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
                     scene_video(brut, d, seg, i % 2, flash=bool(segments))
                     fait = True
                     impacts.append((t, "souffle"))
+                    ambiances.append((t, d, brut))
                     print(f"  {t:5.1f}s  video  {sc.get('requete')}")
             if not fait:                       # pas d'image trouvee -> carte de repli
                 # jamais la requete anglaise a l'ecran : elle n'est qu'une recherche
@@ -292,8 +351,13 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
         ass_ff = str(ass).replace("\\", "/").replace(":", r"\:")
         fonts_ff = str(C.FONTS_DIR).replace("\\", "/").replace(":", r"\:")
         dst = base.with_suffix(".mp4")
-        sfx = travail / "sfx.wav"
+        # un clic discret a chaque nouveau groupe de mots : l'oreille suit la lecture
+        for g in C.grouper(C.mots_dans(mots, s, e)):
+            impacts.append((max(0.0, g[0]["s"] - s), "clic"))
+        sfx, amb, basse = travail / "sfx.wav", travail / "amb.wav", travail / "basse.wav"
         piste_sfx(impacts, duree, sfx)
+        piste_ambiance(ambiances, duree, amb)
+        piste_basse(duree, basse)
         # Trois pistes : la voix intacte, les impacts, et la musique qui s'efface sous
         # la voix (sidechaincompress). Aucun filtre sur la voix : ils la faisaient
         # gresiller sur l'ancien generateur.
@@ -303,17 +367,23 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
                    f"asplit=2[voix][voix_duck];"
                    f"[2:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
                    f"volume={VOL_SFX}[sfx];"
-                   f"[3:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+                   f"[5:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
                    f"volume={VOL_MUSIQUE},afade=t=in:st=0:d=0.8,"
                    f"afade=t=out:st={max(0.0, duree - 1.2):.2f}:d=1.2[mus];"
-                   f"[mus][voix_duck]sidechaincompress=threshold=0.02:ratio=12:attack=15:"
-                   f"release=350[musd];"
-                   f"[voix][sfx][musd]amix=inputs=3:duration=first:normalize=0[a]")
+                   f"[3:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[amb];"
+                   f"[4:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[bas];"
+                   f"[mus][bas]amix=inputs=2:normalize=0[lit];"
+                   f"[lit][voix_duck]sidechaincompress=threshold=0.02:ratio=12:attack=15:"
+                   f"release=350[litd];"
+                   f"[voix][sfx][amb][litd]amix=inputs=4:duration=first:normalize=0[a]")
+        # barre de progression : le spectateur voit la fin approcher et reste
+        barre = (f"drawbox=x=0:y=0:w='iw*t/{duree:.2f}':h=7:color=0xFFB020@0.85:t=fill")
         r = subprocess.run(
             ["ffmpeg", "-y", "-i", str(fond), "-ss", f"{s:.2f}", "-t", f"{duree:.2f}",
-             "-i", str(src), "-i", str(sfx), "-stream_loop", "-1", "-i", str(MUSIQUE),
+             "-i", str(src), "-i", str(sfx), "-i", str(amb), "-i", str(basse),
+             "-stream_loop", "-1", "-i", str(MUSIQUE),
              "-filter_complex",
-             f"[0:v]subtitles='{ass_ff}':fontsdir='{fonts_ff}'[v];{melange}",
+             f"[0:v]subtitles='{ass_ff}':fontsdir='{fonts_ff}',{barre}[v];{melange}",
              "-map", "[v]", "-map", "[a]", "-shortest",
              "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dst)],

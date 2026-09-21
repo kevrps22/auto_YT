@@ -312,10 +312,30 @@ def _propre(mot: str) -> str:
     return mot.strip(" ,.;:!?…\"«»")
 
 
+def grouper(ws: list[dict]) -> list[list[dict]]:
+    """Groupes de 3 mots au plus, qui ne chevauchent JAMAIS deux phrases : sans cette
+    regle on lisait « 8 minutes Mais » ou « c'est vrai Défend ». Une pause marquee
+    ferme aussi le groupe. Sert aussi a caler les clics du montage explicatif."""
+    groupes, cur = [], []
+    for i, w in enumerate(ws):
+        cur.append(w)
+        nxt = ws[i + 1] if i + 1 < len(ws) else None
+        fin_phrase = w["w"].rstrip().endswith((".", "?", "!", "…"))
+        pause = nxt is not None and nxt["s"] - w["e"] > 0.45
+        if len(cur) == WORDS_PER_CAP or fin_phrase or pause or nxt is None:
+            groupes.append(cur)
+            cur = []
+    return groupes
+
+
+def mots_dans(words: list[dict], s: float, e: float) -> list[dict]:
+    return [w for w in words if w["s"] >= s - 0.05 and w["e"] <= e + 0.05 and _propre(w["w"])]
+
+
 def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str = "") -> None:
     """Sous-titres par groupes de 3 mots, mot prononce en orange, apparition animee.
     Encadre d'accroche blanc pendant l'ouverture seulement."""
-    ws = [w for w in words if w["s"] >= s - 0.05 and w["e"] <= e + 0.05 and _propre(w["w"])]
+    ws = mots_dans(words, s, e)
     head = (
         "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 0\n\n"
         "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
@@ -330,25 +350,16 @@ def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str 
         "0,0,3,22,0,8,170,170,0,1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
-    # Groupes de 3 mots au plus, qui ne chevauchent JAMAIS deux phrases : sans cette
-    # regle on lisait « 8 minutes Mais » ou « c'est vrai Défend ». Une pause marquee
-    # ferme aussi le groupe.
-    groupes, cur_g = [], []
-    for i, w in enumerate(ws):
-        cur_g.append(w)
-        nxt = ws[i + 1] if i + 1 < len(ws) else None
-        fin_phrase = w["w"].rstrip().endswith((".", "?", "!", "…"))
-        pause = nxt is not None and nxt["s"] - w["e"] > 0.45
-        if len(cur_g) == WORDS_PER_CAP or fin_phrase or pause or nxt is None:
-            groupes.append(cur_g)
-            cur_g = []
+    groupes = grouper(ws)
     lignes = []
     for grp in groupes:
         for k, cur in enumerate(grp):
             t0 = cur["s"] - s
             t1 = (grp[k + 1]["s"] if k + 1 < len(grp) else grp[-1]["e"]) - s
+            # le mot prononce grossit legerement : l'oeil est attire au rythme de la voix
             txt = " ".join(
-                ("{\\c" + ACTIVE + "}" + _propre(w["w"]) + "{\\c&HFFFFFF&}") if j == k
+                ("{\\c" + ACTIVE + "\\fscx112\\fscy112}" + _propre(w["w"])
+                 + "{\\c&HFFFFFF&\\fscx100\\fscy100}") if j == k
                 else _propre(w["w"]) for j, w in enumerate(grp))
             anim = r"\fscx86\fscy86\t(0,90,\fscx100\fscy100)" if k == 0 else ""
             lignes.append(f"Dialogue: 0,{_ass_time(t0)},{_ass_time(t1)},Cap,,0,0,0,,"
