@@ -36,3 +36,4 @@ clipper/src/
 clipper/out/
 clipper/*.log
 clipper/opus/
+clipper/out_habille/

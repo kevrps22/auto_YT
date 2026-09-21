@@ -187,8 +187,14 @@ def suivre(vid: str, pause: int = 60) -> dict:
         raise RuntimeError(f"Aucun rendu trouve pour {vid}.")
     print(f"Suivi : {run['html_url']}")
     while True:
-        run = _api("GET", f"/actions/runs/{run['id']}").json()
-        jobs = _api("GET", f"/actions/runs/{run['id']}/jobs").json().get("jobs", [])
+        try:
+            run = _api("GET", f"/actions/runs/{run['id']}").json()
+            jobs = _api("GET", f"/actions/runs/{run['id']}/jobs").json().get("jobs", [])
+        except (requests.RequestException, RuntimeError) as e:
+            # une coupure reseau d'une seconde ne doit pas perdre un rendu d'une heure
+            print(f"  reseau indisponible ({type(e).__name__}), nouvel essai", flush=True)
+            time.sleep(pause)
+            continue
         en_cours = [s["name"] for j in jobs for s in j.get("steps", []) if s["status"] == "in_progress"]
         etape = en_cours[0] if en_cours else run["status"]
         if etape != etape_vue:

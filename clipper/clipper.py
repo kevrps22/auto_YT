@@ -30,8 +30,28 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-sys.path.insert(0, str(ROOT))
-import generate as G  # noqa: E402  (.env, chaine de modeles Gemini)
+
+# Le plus capable en tete. Chaque modele a son propre quota gratuit (20 req/jour),
+# donc allonger la liste augmente le nombre de videos possibles par jour.
+GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+                 "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-flash-latest",
+                 "gemini-3.5-flash-lite", "gemini-flash-lite-latest"]
+
+
+def charger_env() -> None:
+    """Lit le .env du projet (CLE=valeur) sans ecraser les variables deja definies :
+    sur GitHub, la cle vient des secrets et il n'y a pas de .env."""
+    f = ROOT / ".env"
+    if not f.exists():
+        return
+    for ligne in f.read_text(encoding="utf-8").splitlines():
+        ligne = ligne.strip()
+        if ligne and not ligne.startswith("#") and "=" in ligne:
+            cle, val = ligne.split("=", 1)
+            os.environ.setdefault(cle.strip(), val.strip().strip("\"'"))
+
+
+charger_env()
 
 W, H = 1080, 1920
 MIN_S, MAX_S = 20.0, 58.0            # un Short au-dela de 60 s n'est plus un Short
@@ -119,7 +139,7 @@ def _json(raw: str):
 
 def choisir(phr: list[dict], cuts: list[float], n: int, titre_src: str) -> list[dict]:
     from google import genai
-    client = genai.Client(api_key=G.os.getenv("GEMINI_API_KEY"))
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     lignes, ci = [], 0
     for p in phr:
         while ci < len(cuts) and cuts[ci] <= p["s"] + 0.3:
@@ -154,7 +174,7 @@ def choisir(phr: list[dict], cuts: list[float], n: int, titre_src: str) -> list[
         '"score": 0-100}]\n\n'
         "TRANSCRIPTION :\n" + "\n".join(lignes)
     )
-    for m in G.GEMINI_MODELS:
+    for m in GEMINI_MODELS:
         try:
             resp = client.models.generate_content(model=m, contents=prompt)
             print(f"[choix] modele {m}")
