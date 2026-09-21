@@ -36,6 +36,11 @@ ACTIONS = {"spinning", "driving", "pouring", "falling", "moving", "flowing", "wo
            "running", "glowing", "burning", "closeup", "close", "macro", "slow", "motion",
            "aerial", "view", "shot", "modern", "large", "small", "people", "person"}
 CARTE_Y = 820                        # hauteur du texte des cartes (au-dessus des sous-titres)
+# eclat blanc de 1 a 2 images a chaque coupe : les changements de plan etaient secs
+FLASH = ",fade=t=in:st=0:d=0.05:color=white,"
+MUSIQUE = C.ROOT / "music" / "bg.mp3"
+VOL_MUSIQUE = 0.10                   # lit les silences sans jamais couvrir la voix
+VOL_SFX = 0.55
 
 
 # ------------------------------------------------------------------ plan visuel
@@ -141,7 +146,7 @@ def _decouper(texte: str, largeur: int = 12) -> str:
     return "\n".join(lignes[:3])
 
 
-def scene_carte(texte: str, duree: float, dst: Path, travail: Path) -> None:
+def scene_carte(texte: str, duree: float, dst: Path, travail: Path, flash: bool = True) -> None:
     """Carte typographique : fond sombre, mot cle en grand, filet orange."""
     txt = _decouper(texte.upper())
     fichier = travail / f"carte_{abs(hash(texte)) % 99999}.txt"
@@ -161,24 +166,61 @@ def scene_carte(texte: str, duree: float, dst: Path, travail: Path) -> None:
           # fixe, le filet barrait la deuxieme ligne.
           f"drawbox=x=(iw-260)/2:y={CARTE_Y + bas}:"
           f"w=260:h=10:color={ACCENT}@0.95:t=fill,"
-          "fade=t=in:st=0:d=0.25,setsar=1")
+          # la carte n'est jamais figee : elle avance de 100 a 105 % pendant le plan
+          f"zoompan=z='min(1+0.0009*on,1.05)':d=1:x='iw/2-(iw/zoom/2)':"
+          f"y='ih/2-(ih/zoom/2)':s={C.W}x{C.H}:fps=30,"
+          f"fade=t=in:st=0:d=0.12{FLASH if flash else ','}setsar=1")
     subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
                     f"color=c={FOND}:s={C.W}x{C.H}:r=30:d={duree:.2f}",
                     "-vf", vf, "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
                     "-pix_fmt", "yuv420p", str(dst)], check=True, capture_output=True)
 
 
-def scene_video(source: Path, duree: float, dst: Path, sens: int) -> None:
+def scene_video(source: Path, duree: float, dst: Path, sens: int, flash: bool = True) -> None:
     """Plan d'illustration recadre en vertical, avec un lent mouvement de camera."""
-    z = (f"min(1.02+0.0009*on,1.12)" if sens else f"max(1.12-0.0009*on,1.02)")
+    # mouvement plus franc : a 0,0009 par image, un plan de 4 s paraissait fige
+    z = ("min(1.00+0.0016*on,1.16)" if sens else "max(1.16-0.0016*on,1.00)")
     vf = (f"scale={int(C.W * 1.2)}:{int(C.H * 1.2)}:force_original_aspect_ratio=increase,"
           f"crop={int(C.W * 1.2)}:{int(C.H * 1.2)},"
           f"zoompan=z='{z}':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
           f"s={C.W}x{C.H}:fps=30,eq=contrast=1.06:saturation=1.05,"
-          "fade=t=in:st=0:d=0.25,setsar=1")
+          f"fade=t=in:st=0:d=0.12{FLASH if flash else ','}setsar=1")
     subprocess.run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(source), "-t", f"{duree:.2f}",
                     "-vf", vf, "-an", "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
                     "-pix_fmt", "yuv420p", str(dst)], check=True, capture_output=True)
+
+
+# ------------------------------------------------------------------ effets sonores
+def piste_sfx(impacts: list[tuple[float, str]], duree: float, dst: Path) -> None:
+    """Fabrique la piste d'effets, sans aucun fichier son a fournir : un impact grave
+    sur les cartes, un souffle sur les plans filmes. Tout est synthetise ici."""
+    import numpy as np
+    import wave
+
+    sr = 48000
+    piste = np.zeros(int((duree + 1.0) * sr), dtype=np.float32)
+    for t, genre in impacts:
+        i = int(t * sr)
+        if genre == "boom":                       # sinus descendant 110 -> 45 Hz
+            n = int(0.45 * sr)
+            x = np.arange(n) / sr
+            f = 110 * np.exp(-x * 3.2) + 45
+            son = np.sin(2 * np.pi * f * x) * np.exp(-x * 6.0) * 0.6
+        else:                                     # souffle : bruit filtre, montee-descente
+            n = int(0.35 * sr)
+            x = np.arange(n) / sr
+            bruit = np.random.default_rng(i).standard_normal(n).astype(np.float32)
+            bruit = np.diff(bruit, prepend=0.0)    # derivation = passe-haut grossier
+            env = np.minimum(x / 0.12, 1.0) * np.exp(-np.maximum(x - 0.12, 0) * 9.0)
+            son = bruit * env * 0.12
+        fin = min(len(piste), i + len(son))
+        piste[i:fin] += son[: fin - i]
+    piste = np.clip(piste, -1.0, 1.0)
+    with wave.open(str(dst), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes((piste * 32767).astype("<i2").tobytes())
 
 
 # ------------------------------------------------------------------ assemblage
@@ -208,7 +250,7 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
     base = SORTIE / f"{vid}_{numero}_{C.slug(clip['titre'])}_explique"
     with tempfile.TemporaryDirectory() as tmp:
         travail = Path(tmp)
-        segments, t = [], 0.0
+        segments, impacts, t = [], [], 0.0
         for i, sc in enumerate(plan):
             fin = min(float(sc.get("fin", t + 4)), duree)
             d = max(1.2, fin - t)
@@ -219,13 +261,15 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
             if sc.get("type") == "video":
                 brut = travail / f"src{i:02d}.mp4"
                 if chercher_clip(sc.get("requete", ""), brut):
-                    scene_video(brut, d, seg, i % 2)
+                    scene_video(brut, d, seg, i % 2, flash=bool(segments))
                     fait = True
+                    impacts.append((t, "souffle"))
                     print(f"  {t:5.1f}s  video  {sc.get('requete')}")
             if not fait:                       # pas d'image trouvee -> carte de repli
                 # jamais la requete anglaise a l'ecran : elle n'est qu'une recherche
                 txt = sc.get("texte") or clip["titre"].split(":")[0]
-                scene_carte(txt, d, seg, travail)
+                scene_carte(txt, d, seg, travail, flash=bool(segments))
+                impacts.append((t, "boom"))
                 print(f"  {t:5.1f}s  carte  {txt}")
             segments.append((seg, d))
             t += d
@@ -233,6 +277,7 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
             seg = travail / "segfin.mp4"
             scene_carte(index.get("chaine", ""), duree - t, seg, travail)
             segments.append((seg, duree - t))
+            impacts.append((t, "boom"))
 
         liste = travail / "liste.txt"
         liste.write_text("".join(f"file '{p.as_posix()}'\n" for p, _ in segments), encoding="utf-8")
@@ -247,11 +292,29 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
         ass_ff = str(ass).replace("\\", "/").replace(":", r"\:")
         fonts_ff = str(C.FONTS_DIR).replace("\\", "/").replace(":", r"\:")
         dst = base.with_suffix(".mp4")
+        sfx = travail / "sfx.wav"
+        piste_sfx(impacts, duree, sfx)
+        # Trois pistes : la voix intacte, les impacts, et la musique qui s'efface sous
+        # la voix (sidechaincompress). Aucun filtre sur la voix : ils la faisaient
+        # gresiller sur l'ancien generateur.
+        # asplit : un label ffmpeg ne se consomme qu'UNE fois, or la voix sert deux
+        # fois, au mixage et comme declencheur de l'attenuation de la musique.
+        melange = (f"[1:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+                   f"asplit=2[voix][voix_duck];"
+                   f"[2:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+                   f"volume={VOL_SFX}[sfx];"
+                   f"[3:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+                   f"volume={VOL_MUSIQUE},afade=t=in:st=0:d=0.8,"
+                   f"afade=t=out:st={max(0.0, duree - 1.2):.2f}:d=1.2[mus];"
+                   f"[mus][voix_duck]sidechaincompress=threshold=0.02:ratio=12:attack=15:"
+                   f"release=350[musd];"
+                   f"[voix][sfx][musd]amix=inputs=3:duration=first:normalize=0[a]")
         r = subprocess.run(
             ["ffmpeg", "-y", "-i", str(fond), "-ss", f"{s:.2f}", "-t", f"{duree:.2f}",
-             "-i", str(src), "-filter_complex",
-             f"[0:v]subtitles='{ass_ff}':fontsdir='{fonts_ff}'[v]",
-             "-map", "[v]", "-map", "1:a", "-shortest",
+             "-i", str(src), "-i", str(sfx), "-stream_loop", "-1", "-i", str(MUSIQUE),
+             "-filter_complex",
+             f"[0:v]subtitles='{ass_ff}':fontsdir='{fonts_ff}'[v];{melange}",
+             "-map", "[v]", "-map", "[a]", "-shortest",
              "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dst)],
             capture_output=True, text=True, encoding="utf-8", errors="replace")

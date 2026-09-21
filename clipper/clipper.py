@@ -321,8 +321,10 @@ def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str 
         "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, "
         "Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Cap,{CAP_FONT},86,&H00FFFFFF,&H00FFFFFF,&H00101010,&H96000000,0,0,0,0,100,100,"
-        "0,0,1,6,4,2,80,80,0,1\n"
+        # Ombre portee plus dense (alpha 0x50 au lieu de 0x96) et contour epaissi : sur
+        # un fond clair comme une route en plein jour, le blanc se noyait.
+        f"Style: Cap,{CAP_FONT},86,&H00FFFFFF,&H00FFFFFF,&H00000000,&H50000000,0,0,0,0,100,100,"
+        "0,0,1,7,5,2,80,80,0,1\n"
         # BorderStyle 3 : fond opaque (couleur de contour) derriere le texte
         f"Style: Hook,{HOOK_FONT},66,&H00141414,&H00141414,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,"
         "0,0,3,22,0,8,170,170,0,1\n\n"
