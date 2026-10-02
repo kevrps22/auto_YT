@@ -89,7 +89,11 @@ def stock() -> list[tuple[int, str, int, dict, dict]]:
         idx = json.loads(f.read_text(encoding="utf-8"))
         if not C.publiable(idx):
             continue
-        for n, clip in enumerate(idx.get("clips", []), 1):
+        # Au-dela du 4e clip d'une meme source, les vues s'effondrent (chez Barrau :
+        # 43k/3,7k/51k sur les trois premiers, 1,2k a 5,7k sur les quatre suivants).
+        # La coupe s'applique ici et pas seulement au rendu : une source rendue en 8
+        # clips n'en proposera que 4.
+        for n, clip in enumerate(idx.get("clips", [])[:CLIPS_PAR_SOURCE], 1):
             if f"{idx['id']}_{n}" in jrn:
                 continue
             if not (C.OUT / clip["fichier"]).exists():
@@ -119,12 +123,14 @@ def menage(simuler: bool = False) -> int:
     for f in sorted(C.OUT.glob("*.json")):
         idx = json.loads(f.read_text(encoding="utf-8"))
         clips = idx.get("clips", [])
+        garde = min(len(clips), CLIPS_PAR_SOURCE)
         for n, clip in enumerate(clips, 1):
-            if f"{idx['id']}_{n}" not in jrn:
-                continue                       # pas encore publie : on garde tout
+            # publie, ou au-dela de la coupe a 4 : dans les deux cas il ne servira plus
+            if n <= garde and f"{idx['id']}_{n}" not in jrn:
+                continue
             jeter(C.OUT / clip["fichier"])
             jeter(C.OUT_HABILLE / (Path(clip["fichier"]).stem + "_explique.mp4"))
-        if clips and all(f"{idx['id']}_{n}" in jrn for n in range(1, len(clips) + 1)):
+        if garde and all(f"{idx['id']}_{n}" in jrn for n in range(1, garde + 1)):
             src = C.SRC / f"{idx['id']}.mp4"   # source epuisee : plus rien a en tirer
             jeter(src)
             for ext in (".words.json", ".scenes.txt", ".clips.json", ".info.json"):
