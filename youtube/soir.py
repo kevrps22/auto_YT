@@ -4,6 +4,7 @@
     python youtube/soir.py --publier            (19 h)  habille et publie le meilleur clip
     python youtube/soir.py --etat               ou en est le stock
     python youtube/soir.py --recoler           marque comme publies les clips deja en ligne
+    python youtube/soir.py --menage            supprime sources et clips devenus inutiles
     ... --simuler                               fait tout sauf l'envoi a YouTube
 
 Deux taches separees, et c'est volontaire : l'approvisionnement dure une heure
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import date, datetime
@@ -96,6 +98,44 @@ def stock() -> list[tuple[int, str, int, dict, dict]]:
     return sorted(dispo, key=lambda x: -x[0])
 
 
+def menage(simuler: bool = False) -> int:
+    """Libere la place. Un entretien de deux heures pese 1,6 Go : sans menage, les
+    15 Go de la carte SD sont pleins en trois semaines et le Pi s'arrete.
+
+    La video source est gardee tant qu'un seul de ses clips reste a publier :
+    l'habillage y reprend la voix et y relit les changements de plan. Les index
+    JSON, eux, ne sont JAMAIS supprimes — ils pesent quelques kilo-octets, ils
+    disent ce qui a deja ete publie, et ce sont eux qui empechent de retraiter une
+    source deja exploitee."""
+    jrn, libere = journal(), 0
+
+    def jeter(p: Path) -> None:
+        nonlocal libere
+        if p.exists():
+            libere += p.stat().st_size
+            if not simuler:
+                p.unlink()
+
+    for f in sorted(C.OUT.glob("*.json")):
+        idx = json.loads(f.read_text(encoding="utf-8"))
+        clips = idx.get("clips", [])
+        for n, clip in enumerate(clips, 1):
+            if f"{idx['id']}_{n}" not in jrn:
+                continue                       # pas encore publie : on garde tout
+            jeter(C.OUT / clip["fichier"])
+            jeter(C.OUT_HABILLE / (Path(clip["fichier"]).stem + "_explique.mp4"))
+        if clips and all(f"{idx['id']}_{n}" in jrn for n in range(1, len(clips) + 1)):
+            src = C.SRC / f"{idx['id']}.mp4"   # source epuisee : plus rien a en tirer
+            jeter(src)
+            for ext in (".words.json", ".scenes.txt", ".clips.json", ".info.json"):
+                jeter(src.with_suffix(ext))
+            for p in sorted(C.SRC.glob(f"{idx['id']}.plan*.json")):
+                jeter(p)
+    if libere:
+        trace(f"menage : {libere / 1e9:.2f} Go {'a liberer' if simuler else 'liberes'}")
+    return libere
+
+
 def sources_faites() -> set[str]:
     return {f.stem for f in C.OUT.glob("*.json")}
 
@@ -143,10 +183,18 @@ def _secondes(iso: str) -> int:
 
 
 def approvisionner(simuler: bool = False) -> None:
+    menage(simuler)                            # avant de mesurer la place, pas apres
     reste = len(stock())
     trace(f"stock : {reste} clip(s) disponible(s)")
     if reste > 1:
         trace("rien a faire, le stock tient encore")
+        return
+    # Une source de deux heures pese jusqu'a 2 Go, et le rendu en ajoute autant en
+    # fichiers temporaires. Mieux vaut ne rien commencer que remplir la carte et
+    # planter en plein travail.
+    libre = shutil.disk_usage(C.MEDIA if C.MEDIA.exists() else C.ROOT).free
+    if libre < 5e9:
+        trace(f"ESPACE INSUFFISANT : {libre / 1e9:.1f} Go libres, il en faut 5")
         return
     choix = candidates()
     if not choix:
@@ -275,6 +323,7 @@ def publier(simuler: bool = False) -> None:
         return
     P.publier(vid, n, simuler=simuler)
     trace("publication terminee")
+    menage(simuler)          # le clip publie et sa version habillee ne servent plus
 
 
 def etat() -> None:
@@ -295,6 +344,9 @@ def main() -> int:
     simuler = "--simuler" in sys.argv
     if "--etat" in sys.argv:
         etat()
+    elif "--menage" in sys.argv:
+        with Verrou():
+            menage(simuler)
     elif "--recoler" in sys.argv:
         with Verrou():
             recoler(simuler)

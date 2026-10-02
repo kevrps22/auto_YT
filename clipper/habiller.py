@@ -508,7 +508,10 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
              # deux seuls reperes fixes de la video
              f"[0:v]{ETALON},subtitles='{ass_ff}':fontsdir='{fonts_ff}',{barre}[v];{melange}",
              "-map", "[v]", "-map", "[a]", "-shortest",
-             "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+             # "medium" sur un PC, "veryfast" sur les quatre petits coeurs du Pi :
+             # le gain de qualite ne vaut pas une heure d'encodage de plus
+             "-c:v", "libx264", "-crf", "18",
+             "-preset", os.environ.get("CLIPPER_X264_PRESET", "medium"), "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dst)],
             capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode:
