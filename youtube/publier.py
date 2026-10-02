@@ -86,15 +86,24 @@ def publier(vid: str, n: int, brut: bool = False, prive: bool = False,
     clip = idx["clips"][n - 1]
     cle, jrn = f"{vid}_{n}", _journal()
 
+    def refus(msg: str) -> None:
+        """En simulation, un garde-fou se signale mais ne coupe pas : le but est
+        justement de voir ce qui serait publie, y compris un jour ou une video est
+        deja partie."""
+        if simuler:
+            print(f"(simulation) {msg}")
+        else:
+            sys.exit(msg)
+
     publiable = clip.get("publiable", "creative" in (idx.get("licence") or "").lower())
     if not publiable and not force:
-        sys.exit("Source hors Creative Commons : publication refusee.\n"
-                 "Il faut l'accord ecrit du createur (--force pour passer outre).")
+        refus("Source hors Creative Commons : publication refusee.\n"
+              "Il faut l'accord ecrit du createur (--force pour passer outre).")
     if cle in jrn and not force:
-        sys.exit(f"Deja publie le {jrn[cle]['date']} : {jrn[cle]['url']}")
+        refus(f"Deja publie le {jrn[cle]['date']} : {jrn[cle]['url']}")
     auj = str(date.today())
     if any(v["date"] == auj for v in jrn.values()) and not force:
-        sys.exit(f"Une video a deja ete publiee aujourd'hui ({auj}). Une par jour.")
+        refus(f"Une video a deja ete publiee aujourd'hui ({auj}). Une par jour.")
 
     video = fichier(idx, clip, brut)
     if not video.exists():
