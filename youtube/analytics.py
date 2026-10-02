@@ -21,6 +21,11 @@ from googleapiclient.discovery import build
 
 from upload import load_creds
 
+# La console Windows est en cp1252 : sans ca, un titre accentue fait planter
+# l'affichage en plein tableau (UnicodeEncodeError).
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # Les donnees Analytics ne sont consolidees qu'au bout de ~48h : une video
 # publiee hier affichera des chiffres partiels, voire vides.
 DELAI_CONSOLIDATION_H = 48

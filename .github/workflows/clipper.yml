@@ -17,7 +17,7 @@ on:
         required: true
       n:
         description: "Nombre de clips"
-        default: "8"
+        default: "4"
       rechoisir:
         description: "Refaire le choix des moments meme s'il existe deja"
         type: boolean

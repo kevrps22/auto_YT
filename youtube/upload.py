@@ -1,5 +1,5 @@
 """
-upload.py — Envoie output/short.mp4 sur YouTube via l'API officielle.
+upload.py — Envoie une video sur YouTube via l'API officielle.
 
 Auth (a faire UNE fois en local) :
   1. Google Cloud Console -> cree un projet -> active "YouTube Data API v3".

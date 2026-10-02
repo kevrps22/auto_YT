@@ -160,7 +160,7 @@ def deposer(rel: dict, fichier: Path) -> None:
     print(f"  envoye en {time.time() - t0:.0f} s", flush=True)
 
 
-def lancer(vid: str, n: int = 8, rechoisir: bool = False) -> None:
+def lancer(vid: str, n: int = 4, rechoisir: bool = False) -> None:
     _api("POST", f"/actions/workflows/{WORKFLOW}/dispatches", json={
         "ref": BRANCHE, "inputs": {"video_id": vid, "n": str(n),
                                    "rechoisir": "true" if rechoisir else "false"}})
@@ -229,7 +229,7 @@ def recuperer(vid: str, dest: Path | None = None) -> dict:
     return json.loads((dest / f"{vid}.json").read_text(encoding="utf-8"))
 
 
-def envoyer(url: str, n: int = 8, avec_cache: bool = True) -> str:
+def envoyer(url: str, n: int = 4, avec_cache: bool = True) -> str:
     import pipeline as P
     P.assurer_ffmpeg()
     src, meta = P.telecharger(url, lambda e, a, d: None)
@@ -252,7 +252,7 @@ def main() -> int:
         print(__doc__)
         return 2
     cmd, arg = sys.argv[1], sys.argv[2]
-    n = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else 8
+    n = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else 4
     if cmd == "envoyer":
         vid = envoyer(arg, n, "--sans-cache" not in sys.argv)
         run = suivre(vid)

@@ -63,6 +63,10 @@ HOOK_Y = 170                         # encadre d'accroche
 HOOK_DUR = 3.2                       # l'accroche disparait apres l'ouverture, comme chez Opus
 CAP_Y = 1540                         # ligne de base des sous-titres (hors zone de l'interface Shorts)
 WORDS_PER_CAP = 3
+# Whisper date le debut d'un mot a l'attaque du son ; l'oeil, lui, a besoin d'une
+# image ou deux d'avance pour que la lecture paraisse simultanee. Sans cette avance
+# les sous-titres semblent suivre la voix au lieu de l'accompagner.
+AVANCE_CAP = 0.10
 # Polices EMBARQUEES dans assets/fonts/ (licence OFL) : Segoe UI n'existe que sous Windows,
 # et le rendu doit etre identique sur le PC et sur les serveurs Linux de GitHub.
 # Dossiers du projet : le code dans clipper/, les polices et la musique dans
@@ -310,8 +314,11 @@ def caler(clip: dict, words: list[dict], phr: list[dict],
 
 # ------------------------------------------------------------------ sous-titres
 def _ass_time(t: float) -> str:
-    t = max(0.0, t)
-    return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{int(t % 60):02d}.{int(t * 100 % 100):02d}"
+    # arrondi au centieme (la resolution de l'ASS) et non troncature : tronquer
+    # decalait chaque mot jusqu'a 10 ms de plus vers l'arriere, qui s'ajoutaient au
+    # retard deja percu.
+    cs = max(0, round(t * 100))
+    return f"{cs // 360000}:{cs // 6000 % 60:02d}:{cs // 100 % 60:02d}.{cs % 100:02d}"
 
 
 def _propre(mot: str) -> str:
@@ -357,10 +364,10 @@ def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str 
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     groupes = grouper(ws)
-    lignes = []
+    evts = []
     for grp in groupes:
         for k, cur in enumerate(grp):
-            t0 = cur["s"] - s
+            t0 = cur["s"] - s - AVANCE_CAP
             t1 = (grp[k + 1]["s"] if k + 1 < len(grp) else grp[-1]["e"]) - s
             # le mot prononce grossit legerement : l'oeil est attire au rythme de la voix
             txt = " ".join(
@@ -368,8 +375,16 @@ def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str 
                  + "{\\c&HFFFFFF&\\fscx100\\fscy100}") if j == k
                 else _propre(w["w"]) for j, w in enumerate(grp))
             anim = r"\fscx86\fscy86\t(0,90,\fscx100\fscy100)" if k == 0 else ""
-            lignes.append(f"Dialogue: 0,{_ass_time(t0)},{_ass_time(t1)},Cap,,0,0,0,,"
-                          + "{\\pos(540," + str(CAP_Y) + ")" + anim + "}" + txt)
+            evts.append([t0, t1, txt, anim])
+    # Deux sous-titres affiches en meme temps se superposent au MEME endroit et le
+    # texte devient illisible : l'avance ne doit jamais empieter sur le precedent,
+    # qui s'efface a l'instant ou le suivant apparait.
+    for a, b in zip(evts, evts[1:]):
+        b[0] = max(b[0], a[0] + 0.04)
+        a[1] = min(a[1], b[0])          # min : pendant un silence, le texte s'efface
+    lignes = [f"Dialogue: 0,{_ass_time(t0)},{_ass_time(t1)},Cap,,0,0,0,,"
+              + "{\\pos(540," + str(CAP_Y) + ")" + anim + "}" + txt
+              for t0, t1, txt, anim in evts]
     if accroche:
         accroche = re.sub(r"[^\w\s'’?!,.:;-]", "", accroche).strip()
         lignes.insert(0, f"Dialogue: 1,{_ass_time(0)},{_ass_time(HOOK_DUR)},Hook,,0,0,0,,"
@@ -413,19 +428,35 @@ def publiable(info: dict) -> bool:
     return "creative" in (info.get("licence") or "").lower()
 
 
+def invite(titre_source: str) -> str:
+    """Le nom de l'invite, tire du titre de l'entretien : deux mots capitalises qui
+    se suivent. Il est place n'importe ou selon les videos — au debut chez Etienne
+    Klein, a la fin chez Aurelien Barrau — et « EN DIRECT » ne doit pas passer pour
+    un nom, d'ou le rejet des mots tout en majuscules."""
+    mots = re.findall(r"[^\W\d_]+", titre_source, flags=re.UNICODE)
+    for a, b in zip(mots, mots[1:]):
+        if all(m[:1].isupper() and not m.isupper() and len(m) > 1 for m in (a, b)):
+            return f"{a} {b}"
+    return ""
+
+
 def description(clip: dict, info: dict) -> str:
     """Description YouTube avec le credit exige par la licence CC BY. Sans elle, la
     licence n'est pas respectee et le createur peut faire retirer la video : les deux
-    premiers clips Thinkerview ont ete publies avec une description vide."""
-    lignes = [clip.get("accroche_ecran") or clip.get("titre", ""), ""]
-    lignes.append(f"Extrait de « {info.get('titre', '')} », par {info.get('chaine', '')}.")
+    premiers clips Thinkerview ont ete publies avec une description vide.
+
+    Format demande : trois lignes, sans accroche ni mots-dieses."""
+    nom = invite(info.get("titre", ""))
+    art = "d'" if nom[:1].lower() in "aeiouyéèêh" else "de "
+    qui = f"l'interview {art}{nom}" if nom else f"« {info.get('titre', '')} »"
+    lignes = [f"Extrait de {qui} par {info.get('chaine', '')}."]
     if info.get("url"):
         lignes.append(f"Vidéo originale : {info['url']}")
     if publiable(info):
-        lignes.append("Licence : Creative Commons Attribution (CC BY)")
+        lignes.append("Licence Creative Commons Attribution (CC BY)")
     else:
         lignes.append("Licence YouTube standard : ne pas publier sans l'accord du créateur.")
-    return "\n".join(lignes).strip()
+    return "\n".join(lignes)
 
 
 def produire(src: Path, choix: list[dict], n: int, suivi=None) -> list[dict]:
@@ -434,7 +465,7 @@ def produire(src: Path, choix: list[dict], n: int, suivi=None) -> list[dict]:
     words = recoller(json.loads(src.with_suffix(".words.json").read_text(encoding="utf-8")))
     phr = phrases(words)
     cuts = scenes(src)
-    out = HERE / "out"
+    out = OUT
     out.mkdir(exist_ok=True)
     for vieux in out.glob(f"{src.stem}_*"):       # un nouveau rendu remplace l'ancien
         vieux.unlink()
@@ -484,7 +515,7 @@ def choix_moments(src: Path, n: int, titre_src: str, rechoisir: bool = False) ->
 
 def main() -> int:
     src = Path(sys.argv[1])
-    n = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else 8
+    n = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else 4
     titre_src = sys.argv[sys.argv.index("--titre") + 1] if "--titre" in sys.argv else src.stem
     choix = choix_moments(src, n, titre_src, "--rechoisir" in sys.argv)
     produire(src, choix, n)

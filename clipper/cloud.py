@@ -58,7 +58,7 @@ def main() -> int:
         return 2
     vid = sys.argv[1]
     etape = sys.argv[sys.argv.index("--etape") + 1] if "--etape" in sys.argv else "tout"
-    n = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else 8
+    n = int(sys.argv[sys.argv.index("--n") + 1]) if "--n" in sys.argv else 4
     src = P.SRC / f"{vid}.mp4"
     info_f = src.with_suffix(".info.json")
     if not src.exists() or not info_f.exists():
