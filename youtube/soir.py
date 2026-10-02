@@ -244,8 +244,11 @@ def publier(simuler: bool = False) -> None:
     jrn = journal()
     auj = str(date.today())
     if any(v["date"] == auj for v in jrn.values()):
-        trace("deja publie aujourd'hui, on s'arrete")
-        return
+        # en simulation rien n'est envoye : s'arreter ici empecherait de tester
+        # la chaine le jour meme d'une publication faite a la main
+        trace("deja publie aujourd'hui" + (" (ignore en simulation)" if simuler else ", on s'arrete"))
+        if not simuler:
+            return
     dispo = stock()
     if not dispo:
         trace("STOCK VIDE : rien a publier ce soir")
