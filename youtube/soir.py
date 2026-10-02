@@ -72,6 +72,13 @@ def journal() -> dict:
     return json.loads(JOURNAL.read_text(encoding="utf-8")) if JOURNAL.exists() else {}
 
 
+def ecrire_journal(jrn: dict) -> None:
+    """media/ est hors depot : sur une machine fraiche, le dossier n'existe pas
+    encore et l'ecriture du journal echouait avant meme la premiere publication."""
+    JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+    JOURNAL.write_text(json.dumps(jrn, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def stock() -> list[tuple[int, str, int, dict, dict]]:
     """Les clips rendus, jamais publies, triés du meilleur au moins bon.
     Chaque entree : (score, id source, numero, clip, index)."""
@@ -229,7 +236,7 @@ def recoler(simuler: bool = False) -> None:
     if simuler:
         trace(f"--simuler : {ajoutes} clip(s) auraient ete marques")
         return
-    JOURNAL.write_text(json.dumps(jrn, ensure_ascii=False, indent=1), encoding="utf-8")
+    ecrire_journal(jrn)
     trace(f"{ajoutes} clip(s) marques comme publies, {len(stock())} restent en stock")
 
 
@@ -261,7 +268,7 @@ def publier(simuler: bool = False) -> None:
         if not simuler:
             jrn[f"{vid}_{n}"] = {"date": auj, "url": "", "titre": clip.get("titre", ""),
                                  "fichier": habille.name, "note": "retrouve sur la chaine"}
-            JOURNAL.write_text(json.dumps(jrn, ensure_ascii=False, indent=1), encoding="utf-8")
+            ecrire_journal(jrn)
         return
     P.publier(vid, n, simuler=simuler)
     trace("publication terminee")
