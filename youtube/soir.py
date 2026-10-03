@@ -316,9 +316,16 @@ def publier(simuler: bool = False) -> None:
         if simuler:
             trace("--simuler : habillage saute")
         else:
-            import habiller as H
-            H.habiller(vid, n)
-            trace(f"habille : {habille.name}")
+            # Un habillage impossible ne doit pas faire sauter la soiree : il manque
+            # parfois la source ou sa transcription (clip rendu ailleurs, fichiers
+            # effaces). On publie alors le clip brut, comme avant l'habillage.
+            try:
+                import habiller as H
+                H.habiller(vid, n)
+                trace(f"habille : {habille.name}")
+            except Exception as e:                  # noqa: BLE001
+                trace(f"HABILLAGE IMPOSSIBLE ({type(e).__name__}: {str(e)[:120]})")
+                trace("-> publication du clip brut")
 
     if deja_en_ligne(clip.get("titre", "")):
         trace("ce titre est DEJA en ligne : publication annulee, journal mis a jour")

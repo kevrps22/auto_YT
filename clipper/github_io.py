@@ -213,10 +213,16 @@ def recuperer(vid: str, dest: Path | None = None) -> dict:
     rel = _api("GET", f"/releases/tags/clipper-{vid}")
     if rel.status_code == 404:
         raise RuntimeError(f"Pas de release clipper-{vid}.")
+    # Les clips ET les fichiers de travail : l'habillage tourne sur le Pi et il lui
+    # faut la transcription, les changements de plan et le choix des moments. Sans
+    # eux il ne sait ni ou commence l'extrait, ni ce qui s'y dit.
+    travail = {f"{vid}.words.json", f"{vid}.scenes.txt", f"{vid}.clips.json"}
     voulus = [a for a in rel.json()["assets"]
-              if a["name"] == f"{vid}.json" or (a["name"].startswith(f"{vid}_") and a["name"].endswith(".mp4"))]
+              if a["name"] == f"{vid}.json" or a["name"] in travail
+              or (a["name"].startswith(f"{vid}_") and a["name"].endswith(".mp4"))]
     for a in voulus:
-        cible = dest / a["name"]
+        cible = (C.SRC if a["name"] in travail else dest) / a["name"]
+        cible.parent.mkdir(parents=True, exist_ok=True)
         if cible.exists() and cible.stat().st_size == a["size"]:
             continue
         with requests.get(a["url"], headers=_h({"Accept": "application/octet-stream"}),
