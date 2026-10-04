@@ -192,7 +192,7 @@ def approvisionner(simuler: bool = False) -> None:
     menage(simuler)                            # avant de mesurer la place, pas apres
     reste = len(stock())
     trace(f"stock : {reste} clip(s) disponible(s)")
-    if reste > 1:
+    if reste > P.par_jour():
         trace("rien a faire, le stock tient encore")
         return
     # Une source de deux heures pese jusqu'a 2 Go, et le rendu en ajoute autant en
@@ -297,10 +297,11 @@ def recoler(simuler: bool = False) -> None:
 def publier(simuler: bool = False) -> None:
     jrn = journal()
     auj = str(date.today())
-    if any(v["date"] == auj for v in jrn.values()):
+    raison = P.trop_tot(jrn)
+    if raison:
         # en simulation rien n'est envoye : s'arreter ici empecherait de tester
         # la chaine le jour meme d'une publication faite a la main
-        trace("deja publie aujourd'hui" + (" (ignore en simulation)" if simuler else ", on s'arrete"))
+        trace(raison + (" (ignore en simulation)" if simuler else ", on s'arrete"))
         if not simuler:
             return
     dispo = stock()

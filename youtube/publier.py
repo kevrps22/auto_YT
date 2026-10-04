@@ -20,7 +20,7 @@ import json
 import os
 import sys
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from googleapiclient.discovery import build
@@ -34,6 +34,34 @@ import clipper as C          # noqa: E402  (dossiers du projet, description(), p
 from upload import load_creds  # noqa: E402
 
 JOURNAL = C.MEDIA / "publies.json"
+
+
+# Deux publications le meme jour doivent etre espacees : au redemarrage apres une
+# coupure, systemd rattrape les creneaux manques d'un coup, et sans cet ecart les
+# deux videos partiraient a une minute d'intervalle.
+ECART_MIN_H = 4
+
+
+def par_jour() -> int:
+    """Publications par jour au maximum (CLIPPER_PAR_JOUR, 2 par defaut)."""
+    try:
+        return max(1, int(os.environ.get("CLIPPER_PAR_JOUR", "2")))
+    except ValueError:
+        return 2
+
+
+def trop_tot(jrn: dict) -> str | None:
+    """La raison de ne pas publier maintenant, ou None si la voie est libre."""
+    auj = str(date.today())
+    du_jour = sum(1 for v in jrn.values() if v.get("date") == auj)
+    if du_jour >= par_jour():
+        return f"deja {du_jour} publication(s) aujourd'hui, le maximum est {par_jour()}"
+    heures = [v["heure"] for v in jrn.values() if v.get("heure")]
+    if heures:
+        ecart = (datetime.now() - datetime.fromisoformat(max(heures))).total_seconds() / 3600
+        if ecart < ECART_MIN_H:
+            return f"la precedente est partie il y a {ecart:.1f} h, il en faut {ECART_MIN_H}"
+    return None
 
 
 def format_publie() -> str:
@@ -111,8 +139,9 @@ def publier(vid: str, n: int, brut: bool = False, prive: bool = False,
     if cle in jrn and not force:
         refus(f"Deja publie le {jrn[cle]['date']} : {jrn[cle]['url']}")
     auj = str(date.today())
-    if any(v["date"] == auj for v in jrn.values()) and not force:
-        refus(f"Une video a deja ete publiee aujourd'hui ({auj}). Une par jour.")
+    raison = trop_tot(jrn)
+    if raison and not force:
+        refus(f"Publication refusee : {raison}.")
 
     video = fichier(idx, clip, brut)
     if not video.exists():
@@ -144,7 +173,8 @@ def publier(vid: str, n: int, brut: bool = False, prive: bool = False,
             print(f"  echec ({str(e)[:90]}) -> essai {essai + 1}/3")
             time.sleep(20 * essai)
     url = f"https://youtu.be/{rep['id']}"
-    jrn[cle] = {"date": auj, "url": url, "titre": titre, "fichier": video.name}
+    jrn[cle] = {"date": auj, "heure": datetime.now().isoformat(timespec="minutes"),
+                "url": url, "titre": titre, "fichier": video.name}
     JOURNAL.parent.mkdir(parents=True, exist_ok=True)
     JOURNAL.write_text(json.dumps(jrn, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"Publie : {url}")

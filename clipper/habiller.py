@@ -13,12 +13,14 @@ construit sur mesure, si. Ca ne garantit pas l'acceptation, la revue est humaine
 """
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 
 import requests
@@ -30,7 +32,6 @@ import clipper as C  # noqa: E402
 SORTIE = C.OUT_HABILLE
 FOND = "0x0E1015"                    # fond des cartes typographiques
 ACCENT = "0xFFB020"                  # meme orange que le mot prononce des sous-titres
-SCENE_MIN, SCENE_MAX = 2.2, 6.0
 # verbes et etats : presents dans les requetes, inutiles pour reconnaitre le sujet
 ACTIONS = {"spinning", "driving", "pouring", "falling", "moving", "flowing", "working",
            "running", "glowing", "burning", "closeup", "close", "macro", "slow", "motion",
@@ -45,7 +46,10 @@ FAIBLES = {"model", "double", "business", "businessman", "office", "table", "scr
            "hand", "hands", "woman", "girl", "city", "night", "time", "life"}
 # Poses de studio et contenus promotionnels : le mot est bien dans le descriptif,
 # mais l'image ne montre rien du propos.
-BANNIS = {"posing", "poses", "fashion", "influencer", "advertisement", "logo"}
+BANNIS = {"posing", "poses", "fashion", "influencer", "advertisement", "logo",
+          # un sujet francais illustre par Wall Street, le 04/10
+          "flag", "flags", "american", "america", "usa", "washington", "capitol",
+          "nyc", "manhattan"}
 # Sous 1920 px de haut, le plan est agrandi pour remplir le cadre puis encore par le
 # zoom : c'est exactement ce qui faisait « cheap » sur deux ou trois plans.
 HAUTEUR_MIN = 1920
@@ -70,49 +74,214 @@ VOL_MUSIQUE = 0.10                   # lit les silences sans jamais couvrir la v
 VOL_SFX = 0.55
 
 
-# ------------------------------------------------------------------ plan visuel
-def plan_visuel(texte: str, duree: float, titre: str) -> list[dict]:
-    """Gemini decoupe le discours en scenes et dit quoi montrer sur chacune."""
+# ------------------------------------------------------------------ Gemini
+def _gemini(prompt: str, etiquette: str) -> str:
+    """Un appel Gemini, en passant au modele suivant quand l'un est indisponible ou
+    a epuise son quota gratuit (20 requetes par jour et par modele)."""
     from google import genai
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    prompt = (
-        "Tu es monteur de videos explicatives. Voici la transcription horodatee d'un "
-        f"extrait de {duree:.0f} secondes, tire de « {titre} ».\n\n"
-        "Fabrique le PLAN VISUEL qui accompagne cette voix : une scene par idee, "
-        f"entre {SCENE_MIN:.0f} et {SCENE_MAX:.0f} secondes, sans trou ni chevauchement, "
-        f"de 0.0 a {duree:.1f}.\n\n"
-        "Deux types de scenes :\n"
-        '- "video" : une image d\'illustration filmable. Donne `requete`, 2 a 4 mots '
-        "ANGLAIS tres concrets : un OBJET, une MATIERE ou un LIEU. Jamais d'abstraction, "
-        "jamais de metaphore, jamais de mot de cadrage, et JAMAIS quelqu'un en train de "
-        "faire un geste : « man touching his forehead » ne ramene que des poses de "
-        "studio sans rapport, alors qu'un objet ramene l'objet. Donne AUSSI `texte`, le "
-        "mot cle francais correspondant : il s'affiche si aucune image n'est trouvee.\n"
-        '- "carte" : un mot ou un chiffre cle affiche en grand. Donne `texte`, 1 a 4 mots '
-        "FRANCAIS en majuscules. Sers-t'en pour les chiffres, les definitions et les "
-        "idees qu'aucune image ne montre.\n\n"
-        "La MOITIE au moins des scenes doit etre de type video : une suite de cartes "
-        "donne un diaporama, pas une video explicative. Jamais plus d'une carte de "
-        "suite. Les scenes suivent ce qui est DIT au meme moment.\n\n"
-        "Les `texte` s'affichent a l'ecran : francais en MAJUSCULES ACCENTUEES "
-        "(ecris ÉNERGIE et non ENERGIE, SYSTÈME et non SYSTEME).\n"
-        "Reponds UNIQUEMENT par un tableau JSON :\n"
-        '[{"debut": 0.0, "fin": 3.4, "type": "video", "requete": "power plant turbine", '
-        '"texte": ""}]\n\n'
-        f"TRANSCRIPTION :\n{texte}"
-    )
     for m in C.GEMINI_MODELS:
         try:
             r = client.models.generate_content(model=m, contents=prompt)
-            print(f"[plan] modele {m}")
-            return C._json(r.text)
+            print(f"[{etiquette}] modele {m}")
+            return r.text
         except Exception as e:
             if any(x in str(e) for x in ("RESOURCE_EXHAUSTED", "429", "NOT_FOUND", "404",
                                          "UNAVAILABLE", "503", "INTERNAL", "500")):
-                print(f"[plan] {m} indispo -> suivant")
+                print(f"[{etiquette}] {m} indispo -> suivant")
                 continue
             raise
     raise RuntimeError("Tous les modeles Gemini sont epuises.")
+
+
+def _norm(t: str) -> str:
+    t = unicodedata.normalize("NFD", t.lower())
+    return "".join(c for c in t if unicodedata.category(c) != "Mn")
+
+
+def _jetons(t: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", _norm(t))
+
+
+# ------------------------------------------------------------------ segments de parole
+SEG_MIN, SEG_MAX = 1.8, 4.5          # duree d'un segment, en secondes
+# Au-dela, meme avec le mouvement de camera, un plan parait fige : un plan de 9,6 s
+# couvrait deux phrases entieres le 04/10.
+PLAN_MAX = 6.5
+
+
+def segmenter(mots: list[dict], s: float, duree: float) -> list[dict]:
+    """Decoupe la parole en segments de 2 a 4,5 s, coupes sur les fins de phrase et
+    les pauses. Ce sont EUX qui fixent les instants du montage, et non Gemini : il
+    inventait ses propres bornes, et ses cartes tombaient a cote de ce qui etait dit
+    (« EUROPE DE L'OUEST » affiche pendant « la vraisemblance », le 04/10)."""
+    brut, cur = [], []
+    for i, w in enumerate(mots):
+        cur.append(w)
+        long = w["e"] - cur[0]["s"]
+        nxt = mots[i + 1] if i + 1 < len(mots) else None
+        fin_phrase = w["w"].rstrip().endswith((".", "?", "!", "…"))
+        pause = nxt is not None and nxt["s"] - w["e"] > 0.35
+        if nxt is None or long >= SEG_MAX or (long >= SEG_MIN and (fin_phrase or pause)):
+            brut.append(cur)
+            cur = []
+    segs = []
+    for k, ms in enumerate(brut):
+        debut = 0.0 if k == 0 else round(ms[0]["s"] - s, 2)
+        fin = round(brut[k + 1][0]["s"] - s, 2) if k + 1 < len(brut) else round(duree, 2)
+        if segs and fin - debut < 1.2:       # bout de phrase isole : avec le precedent
+            segs[-1]["mots"] += ms
+            segs[-1]["fin"] = fin
+            continue
+        segs.append({"mots": list(ms), "debut": debut, "fin": fin})
+    for k, sg in enumerate(segs, 1):
+        sg["n"] = k
+        sg["texte"] = " ".join(x["w"] for x in sg["mots"]).strip()
+    return segs
+
+
+# ------------------------------------------------------------------ plan, segment par segment
+def planifier(segs: list[dict], titre: str) -> list[dict]:
+    """Un seul appel : pour chaque segment, le texte corrige et ce qu'il faut
+    montrer. Gemini ne choisit plus QUAND, seulement QUOI."""
+    lignes = "\n".join(f'{sg["n"]}. [{sg["debut"]:.1f}-{sg["fin"]:.1f} s] {sg["texte"]}'
+                       for sg in segs)
+    prompt = (
+        "Tu es monteur de videos explicatives verticales. Voici un extrait de "
+        f"« {titre} », deja decoupe en segments numerotes, avec ce qui est DIT dans "
+        "chacun.\n\n"
+        "Pour CHAQUE segment, rends un objet JSON :\n"
+        '- "n" : le numero du segment.\n'
+        '- "texte" : le texte du segment, avec SEULEMENT les erreurs de transcription '
+        "corrigees — des mots mal entendus (« la vraie semblance » -> « la "
+        "vraisemblance », « 8000 mal par mois » -> « 8000 balles par mois »). Ne "
+        "reformule rien, ne resume rien, garde l'oral. Si rien n'est faux, recopie.\n"
+        '- "visuel" : "video", "carte" ou "suite".\n'
+        '  * "carte" UNIQUEMENT si le segment enonce un chiffre, une date, un '
+        "pourcentage ou un nom propre.\n"
+        '  * "suite" garde l\'image du segment precedent quand l\'idee continue : une '
+        "image doit tenir 4 a 8 secondes, pas changer a chaque phrase.\n"
+        '  * "video" sinon. Jamais deux "carte" de suite.\n'
+        '- "carte" : si visuel = carte, 1 a 4 mots ou un chiffre PRIS DANS CE QUI EST '
+        "DIT dans ce segment, en MAJUSCULES ACCENTUEES (« -20 % D'EAU », « 2038 »).\n"
+        '- "requete" : TOUJOURS, meme pour une carte : 2 a 4 mots ANGLAIS decrivant un '
+        "OBJET, une MATIERE ou un PHENOMENE NATUREL concret qui illustre CE segment "
+        "precis. Interdits : personnes qui font un geste, batiments officiels, "
+        "drapeaux, villes, rues, bureaux, ecrans, tout ce qui designe un pays — une "
+        "banque d'images renvoie ces lieux d'un autre pays que celui dont on parle.\n"
+        '- "repli" : 1 a 3 mots PRIS DANS CE QUI EST DIT, l\'idee du segment, en '
+        "MAJUSCULES ACCENTUEES. Affiche si aucune image ne convient.\n\n"
+        "Le premier segment est l'accroche : son image doit etre la plus forte.\n"
+        "Reponds UNIQUEMENT par le tableau JSON, un objet par segment, dans l'ordre.\n\n"
+        f"SEGMENTS :\n{lignes}"
+    )
+    plan = C._json(_gemini(prompt, "plan"))
+    par_n = {int(p.get("n", 0)): p for p in plan if isinstance(p, dict)}
+    return [par_n.get(sg["n"], {}) for sg in segs]
+
+
+def _dit(etiquette: str, texte: str) -> bool:
+    """La carte affiche-t-elle quelque chose qui est reellement DIT ? Un chiffre
+    ou un mot de trois lettres au moins, present dans le texte du segment."""
+    dits = set(_jetons(texte))
+    return any(j in dits for j in _jetons(etiquette) if len(j) >= 3 or j.isdigit())
+
+
+VIDES = {"les", "des", "une", "est", "que", "qui", "pas", "pour", "dans", "avec", "sur",
+         "mais", "donc", "alors", "cette", "ces", "son", "ses", "leur", "nous", "vous",
+         "ils", "elle", "tout", "tous", "plus", "tres", "fait", "faut", "avoir", "etre",
+         "comme", "aussi", "bien", "quand", "parce", "voila", "enfin"}
+
+
+def _repli(texte: str) -> str:
+    """A defaut de mieux : les deux mots les plus longs de la phrase."""
+    mots = [m.strip(" ,.;:!?…«»\"'") for m in texte.split()]
+    pleins = [m for m in mots if len(m) >= 5 and _norm(m) not in VIDES]
+    garde = sorted(sorted(set(pleins), key=len, reverse=True)[:2], key=pleins.index)
+    return " ".join(garde).upper() or "ÉCOUTEZ"
+
+
+def corriger(segs: list[dict], plan: list[dict]) -> list[dict]:
+    """Reporte le texte corrige sur les horodatages de Whisper, mot a mot. Les mots
+    identiques gardent leur instant exact ; un mot corrige occupe le creneau de
+    ceux qu'il remplace. Si la « correction » s'eloigne trop de ce qui a ete
+    entendu, c'est que Gemini a reformule : on garde Whisper."""
+    out: list[dict] = []
+    for sg, p in zip(segs, plan):
+        wh = sg["mots"]
+        corr = (p.get("texte") or "").split()
+        a, b = [_norm(w["w"]) for w in wh], [_norm(x) for x in corr]
+        sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+        if not corr or sm.ratio() < 0.6:
+            out += wh
+            continue
+        for op, i1, i2, j1, j2 in sm.get_opcodes():
+            if op == "equal":
+                out += [{**wh[i1 + k], "w": corr[j1 + k]} for k in range(i2 - i1)]
+            elif j2 > j1:                       # remplacement ou insertion
+                if i2 > i1:
+                    t0, t1 = wh[i1]["s"], wh[i2 - 1]["e"]
+                else:
+                    t0 = wh[i1 - 1]["e"] if i1 > 0 else wh[0]["s"]
+                    t1 = wh[i1]["s"] if i1 < len(wh) else t0 + 0.15 * (j2 - j1)
+                t1 = max(t1, t0 + 0.08 * (j2 - j1))
+                poids = [max(1, len(corr[j])) for j in range(j1, j2)]
+                t = t0
+                for j, pd in zip(range(j1, j2), poids):
+                    d = (t1 - t0) * pd / sum(poids)
+                    out.append({"w": corr[j], "s": round(t, 2), "e": round(t + d, 2)})
+                    t += d
+    return out
+
+
+def composer(segs: list[dict], plan: list[dict]) -> list[dict]:
+    """Transforme le plan en scenes contigues, en faisant RESPECTER par le code ce
+    que la consigne demande — Gemini ne le fait pas toujours (deux cartes de suite
+    le 04/10, alors que c'etait interdit en toutes lettres)."""
+    scenes: list[dict] = []
+    for sg, p in zip(segs, plan):
+        texte = (p.get("texte") or sg["texte"]).strip()
+        visuel = (p.get("visuel") or "video").strip().lower()
+        carte = (p.get("carte") or "").strip().upper()
+        requete = (p.get("requete") or "").strip()
+        repli = (p.get("repli") or "").strip().upper()
+        if not repli or not _dit(repli, texte):
+            repli = _repli(texte)
+        if visuel == "carte" and not (carte and _dit(carte, texte)):
+            visuel = "video"                    # carte sans rapport avec ce qui est dit
+        if visuel == "carte" and not scenes and requete:
+            visuel = "video"                    # une diapositive en premiere seconde : non
+        if visuel == "carte" and scenes and scenes[-1]["type"] == "carte":
+            visuel = "video"
+        if visuel == "suite":
+            prec = scenes[-1] if scenes else None
+            # on ne prolonge qu'une image filmee, et jamais au-dela de PLAN_MAX ;
+            # sinon le segment recoit sa propre image
+            if prec and prec["type"] == "video" and sg["fin"] - prec["debut"] <= PLAN_MAX:
+                prec["fin"] = sg["fin"]
+                prec["texte"] += " " + texte
+                continue
+            visuel = "video"
+        if visuel != "carte" and not requete:
+            if scenes and scenes[-1]["type"] == "carte":
+                scenes[-1]["fin"] = sg["fin"]
+                continue
+            visuel, carte = "carte", repli
+        base = {"debut": sg["debut"], "fin": sg["fin"], "texte": texte,
+                "requete": requete, "large": (p.get("large") or "").strip(), "repli": repli}
+        if visuel == "carte":
+            # La carte reste le temps de la lire ; le reste du segment est illustre
+            # par une image du MEME segment, pour que la suivante tombe a l'heure.
+            lu = lisible(carte)
+            if requete and sg["fin"] - sg["debut"] - lu >= 1.0:
+                coupe = round(sg["debut"] + lu, 2)
+                scenes.append({**base, "type": "carte", "carte": carte, "fin": coupe})
+                scenes.append({**base, "type": "video", "debut": coupe})
+            else:
+                scenes.append({**base, "type": "carte", "carte": carte})
+        else:
+            scenes.append({**base, "type": "video"})
+    return scenes
 
 
 # ------------------------------------------------------------------ images d'illustration
@@ -138,24 +307,35 @@ def _meilleur_fichier(v: dict) -> dict | None:
     return f if (f.get("height") or 0) >= HAUTEUR_MIN else None
 
 
-def chercher_clip(requete: str, dst: Path) -> int:
-    """Telecharge un plan vertical Pexels pertinent ET net. Renvoie sa hauteur en
-    pixels, 0 si rien ne convient.
+def _description(v: dict) -> str:
+    """Le slug de l'URL Pexels, rendu lisible : c'est le seul descriptif disponible."""
+    bout = v.get("url", "").rstrip("/").rsplit("/", 1)[-1]
+    return re.sub(r"-?\d+$", "", bout).replace("-", " ").strip()
 
-    Deux passes : d'abord les sources 4K natives, puis le Full HD. Pertinence
-    d'abord, definition ensuite : un plan net hors sujet reste hors sujet."""
+
+def candidats(requete: str, large: str = "", k: int = 8) -> list[dict]:
+    """Jusqu'a k plans Pexels verticaux et nets, tires de la requete precise puis de
+    la requete large. Une recherche precise echoue souvent — « dry rusty tap »
+    ramenait une jetee rouillee et une mouette — et le juge doit avoir de vrais
+    choix. Rien n'est telecharge ici : c'est lui qui tranchera."""
+    vus: set[int] = set()
+    out: list[dict] = []
+    for q in (requete, large):
+        if q and len(out) < k:
+            out += [c for c in _pexels(q, vus) if len(out) < k]
+    return out
+
+
+def _pexels(requete: str, vus: set[int], k: int = 6) -> list[dict]:
+    """Les meilleurs plans d'UNE requete. Le 4K natif d'abord, le Full HD ensuite."""
     cle = os.getenv("PEXELS_API_KEY")
     if not cle or not requete:
-        return 0
-    # On note les candidats sur les NOMS de la requete. Exiger n'importe quel mot
-    # laissait passer un disque vinyle pour « electricity meter spinning » (via
-    # "spinning") ; exiger le mot le plus long rejetait presque toutes les recherches.
+        return []
     mots = [m for m in re.findall(r"[a-z]+", requete.lower())
             if len(m) > 3 and m not in ACTIONS]
     forts = [m for m in mots if m not in FAIBLES]
-    notes: list[tuple[int, int, int, dict, dict]] = []
-    vus: set[int] = set()
-    for taille in ("large", "medium"):             # large = 4K mini chez Pexels
+    notes = []
+    for taille in ("large", "medium"):
         try:
             r = requests.get("https://api.pexels.com/videos/search", timeout=30,
                              headers={"Authorization": cle},
@@ -166,34 +346,119 @@ def chercher_clip(requete: str, dst: Path) -> int:
             continue
         for v in vids:
             toks = set(re.findall(r"[a-z]+", v.get("url", "").lower()))
-            note = sum(1 for m in mots if _present(m, toks))
-            fort = sum(1 for m in forts if _present(m, toks))
-            if v["id"] in _pris or v["id"] in vus or not fort or toks & BANNIS:
+            if v["id"] in _pris or v["id"] in vus or toks & BANNIS:
                 continue
             f = _meilleur_fichier(v)
             if not f:
                 continue
             vus.add(v["id"])
-            notes.append((fort, note, f.get("height") or 0, v, f))
-        if notes:                                  # du 4K pertinent : inutile de descendre
+            fort = sum(1 for m in forts if _present(m, toks))
+            note = sum(1 for m in mots if _present(m, toks))
+            notes.append({"id": v["id"], "desc": _description(v), "lien": f["link"],
+                          "hauteur": f.get("height") or 0, "rang": (fort, note)})
+        if sum(1 for n in notes if n["rang"][0]) >= k:
             break
-    # D'abord les plans qui recoupent DEUX mots de la requete : un seul mot commun ne
-    # prouve rien sur un slug qui en aligne dix. S'il n'y en a aucun, un mot fort
-    # suffit ; sinon on rend la main et la scene devient une carte, ce qui vaut
-    # toujours mieux qu'un plan hors sujet.
-    retenus = [n for n in notes if n[1] >= 2] or notes
-    for _, _, hauteur, v, f in sorted(retenus, key=lambda x: (-x[1], -x[0], -x[2])):
+    notes.sort(key=lambda n: (-n["rang"][0], -n["rang"][1], -n["hauteur"]))
+    return notes[:k]
+
+
+def juger(scenes: list[dict], pool: dict[int, list[dict]]) -> dict[int, int]:
+    """Un seul appel pour toute la video : pour chaque scene, Gemini lit ce qui est
+    dit et la description des plans proposes, et choisit — ou refuse tout. C'est le
+    controle qui manquait : le filtre par mots-cles ne savait pas qu'un drapeau
+    americain ne convient pas a une phrase sur la France (le 04/10)."""
+    if not pool:
+        return {}
+    blocs = []
+    for k, cands in pool.items():
+        liste = "\n".join(f"   {j}. {c['desc']}" for j, c in enumerate(cands, 1))
+        blocs.append(f"SCENE {k} — on entend : « {scenes[k]['texte']} »\n{liste}")
+    prompt = (
+        "Tu choisis les images d'une video explicative. Pour chaque scene, voici ce "
+        "qui est DIT pendant qu'elle est a l'ecran, puis des plans video proposes par "
+        "une banque d'images, decrits par leur titre.\n\n"
+        "Choisis le plan qui ILLUSTRE LE MIEUX CE QUI EST DIT. Refuse avec 0 :\n"
+        "- un plan dont le lieu ou les symboles contredisent le propos (drapeau, "
+        "monument ou ville d'un autre pays que celui dont on parle) ;\n"
+        "- des personnes qui posent, des mains sans contexte, des bureaux, des ecrans ;\n"
+        "- un plan qui n'a qu'un MOT en commun avec la phrase, pas le sens.\n"
+        "Mieux vaut 0 qu'un plan faux : la scene recevra un autre traitement.\n\n"
+        'Reponds UNIQUEMENT par un tableau JSON : [{"scene": 0, "choix": 3}, ...]\n\n'
+        + "\n\n".join(blocs)
+    )
+    try:
+        rep = C._json(_gemini(prompt, "juge"))
+    except Exception as e:                      # noqa: BLE001
+        print(f"[juge] indisponible ({type(e).__name__}) : premier candidat retenu")
+        return {k: 1 for k in pool}
+    out = {}
+    for r in rep if isinstance(rep, list) else []:
         try:
-            with requests.get(f["link"], stream=True, timeout=60) as d:
-                d.raise_for_status()
-                with dst.open("wb") as out:
-                    for bloc in d.iter_content(1 << 20):
-                        out.write(bloc)
-        except Exception:
+            out[int(r["scene"])] = int(r.get("choix", 0))
+        except (KeyError, TypeError, ValueError):
             continue
-        _pris.add(v["id"])
-        return hauteur
-    return 0
+    return out
+
+
+def _telecharger(lien: str, dst: Path) -> bool:
+    try:
+        with requests.get(lien, stream=True, timeout=60) as d:
+            d.raise_for_status()
+            with dst.open("wb") as out:
+                for bloc in d.iter_content(1 << 20):
+                    out.write(bloc)
+        return True
+    except Exception:
+        return False
+
+
+def illustrer(scenes: list[dict], travail: Path) -> list[dict]:
+    """Trouve, fait juger et telecharge l'image de chaque scene video, puis decide
+    du sort des scenes restees sans image acceptable.
+
+    Deux passes, parce que le repli a besoin de connaitre la suite : le 04/10, les
+    premieres scenes refusees sont devenues sept cartes d'affilee faute d'image
+    filmee AVANT elles — alors qu'il y en avait de bonnes juste APRES."""
+    pool = {k: c for k, sc in enumerate(scenes)
+            if sc["type"] == "video" and (c := candidats(sc["requete"], sc.get("large", "")))}
+    choix = juger(scenes, pool)
+
+    images: dict[int, dict] = {}                # 1re passe : ce qui a ete accepte
+    for k, cands in pool.items():
+        j = choix.get(k, 0)
+        if not 1 <= j <= len(cands) or cands[j - 1]["id"] in _pris:
+            continue
+        c, dst = cands[j - 1], travail / f"src{k:02d}.mp4"
+        if _telecharger(c["lien"], dst):
+            _pris.add(c["id"])
+            images[k] = {"fichier": dst, "hauteur": c["hauteur"], "desc": c["desc"]}
+
+    final: list[dict] = []                      # 2e passe : le montage
+    for k, sc in enumerate(scenes):
+        if sc["type"] == "video" and k in images:
+            final.append({**sc, **images[k]})
+            continue
+        if sc["type"] == "video":
+            prec = final[-1] if final else None
+            if prec and prec["type"] == "video" and sc["fin"] - prec["debut"] <= PLAN_MAX:
+                prec["fin"] = sc["fin"]          # on prolonge l'image filmee precedente
+                continue
+            # sinon on reprend l'image filmee la plus proche, avant ou apres : le
+            # cadrage alterne d'une scene a l'autre, ca se lit comme un recadrage
+            proches = [i for i in images if i < k][-1:] or [i for i in images if i > k][:1]
+            if proches:
+                img = images[proches[0]]
+                final.append({**sc, **img, "desc": img["desc"] + " (reprise)"})
+                continue
+            # Aucune image dans toute la video : une carte, jamais etiree au-dela de
+            # ce qu'elle dit (l'aplat fige corrige le 22/09).
+            sc = {**sc, "type": "carte", "carte": sc["repli"]}
+        prec = final[-1] if final else None
+        if prec and prec["type"] == "carte" and prec["carte"] == sc["carte"]:
+            prec["fin"] = sc["fin"]
+            continue
+        final.append(sc)
+    return final
 
 
 # ------------------------------------------------------------------ rendu des scenes
@@ -371,25 +636,6 @@ def piste_basse(duree: float, dst: Path) -> None:
 
 
 # ------------------------------------------------------------------ assemblage
-def rythmer(plan: list[dict], duree: float) -> list[dict]:
-    """Donne sa duree a chaque scene. Une carte ne garde que son temps de lecture et
-    rend le reste a la scene suivante, qui demarre donc plus tot : la carte tombe
-    toujours sur le mot qui la declenche, mais ne s'attarde plus apres."""
-    scenes, t = [], 0.0
-    for p in plan:
-        fin = min(float(p.get("fin", t + 4)), duree)
-        d = max(1.2, fin - t)
-        scenes.append({**p, "d": d})
-        t += d
-    for i, p in enumerate(scenes):
-        if p.get("type") != "carte" or i + 1 >= len(scenes):
-            continue
-        garde = min(p["d"], lisible(p.get("texte") or ""))
-        scenes[i + 1]["d"] += p["d"] - garde
-        p["d"] = garde
-    return scenes
-
-
 def habiller(vid: str, numero: int, replan: bool = False) -> Path:
     src = C.SRC / f"{vid}.mp4"
     index = json.loads((C.OUT / f"{vid}.json").read_text(encoding="utf-8"))
@@ -401,57 +647,45 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
     duree = e - s
     print(f"[extrait] {clip['titre']} · {s:.1f}-{e:.1f}s ({duree:.0f}s)")
 
-    dedans = [p for p in phr if p["e"] > s and p["s"] < e]
-    texte = "\n".join(f"[{max(0, p['s'] - s):.1f}-{min(duree, p['e'] - s):.1f}] {p['t']}"
-                      for p in dedans)
-    cache = src.with_suffix(f".plan{numero}.json")
+    segs = segmenter(C.mots_dans(mots, s, e), s, duree)
+    # Le plan est mis en cache avec les segments qu'il decrit : si le decoupage
+    # change, l'ancien plan ne correspond plus a rien et il est refait.
+    cache = src.with_suffix(f".plan{numero}.v2.json")
+    plan = None
     if cache.exists() and not replan:
-        plan = json.loads(cache.read_text(encoding="utf-8"))
-        print("[plan] relu depuis le cache")
-    else:
-        plan = plan_visuel(texte, duree, index.get("titre", vid))
-        cache.write_text(json.dumps(plan, ensure_ascii=False, indent=1), encoding="utf-8")
+        lu = json.loads(cache.read_text(encoding="utf-8"))
+        if lu.get("segments") == [sg["texte"] for sg in segs]:
+            plan = lu["plan"]
+            print("[plan] relu depuis le cache")
+    if plan is None:
+        plan = planifier(segs, index.get("titre", vid))
+        cache.write_text(json.dumps({"segments": [sg["texte"] for sg in segs], "plan": plan},
+                                    ensure_ascii=False, indent=1), encoding="utf-8")
+    mots_corr = corriger(segs, plan)
+    scenes = composer(segs, plan)
 
     SORTIE.mkdir(exist_ok=True)
     base = SORTIE / f"{vid}_{numero}_{C.slug(clip['titre'])}_explique"
     with tempfile.TemporaryDirectory() as tmp:
         travail = Path(tmp)
-        plan = rythmer(plan, duree)
-        segments, impacts, ambiances, t = [], [], [], 0.0
-        for i, sc in enumerate(plan):
-            d = sc["d"]
-            if t >= duree - 0.3:
-                break
+        scenes = illustrer(scenes, travail)
+        if not scenes:                         # pas de parole exploitable
+            scenes = [{"type": "carte", "carte": (clip.get("accroche") or clip["titre"]).upper(),
+                       "debut": 0.0, "fin": round(duree, 2)}]
+        segments, impacts, ambiances = [], [], []
+        for i, sc in enumerate(scenes):
+            d = sc["fin"] - sc["debut"]
             seg = travail / f"seg{i:02d}.mp4"
-            fait = False
-            if sc.get("type") == "video":
-                brut = travail / f"src{i:02d}.mp4"
-                hauteur = chercher_clip(sc.get("requete", ""), brut)
-                if hauteur:
-                    scene_video(brut, d, seg, i % 2, flash=bool(segments))
-                    fait = True
-                    impacts.append((t, "souffle"))
-                    ambiances.append((t, d, brut))
-                    print(f"  {t:5.1f}s  video  {hauteur}p  {sc.get('requete')}")
-            if not fait:                       # pas d'image trouvee -> carte de repli
-                # jamais la requete anglaise a l'ecran : elle n'est qu'une recherche
-                txt = sc.get("texte") or clip["titre"].split(":")[0]
-                # une carte de repli dure le temps qu'on la lit, comme les autres :
-                # ici seulement, car on ne sait qu'a cet instant que Pexels a echoue
-                garde = min(d, lisible(txt))
-                if garde < d and i + 1 < len(plan):
-                    plan[i + 1]["d"] += d - garde
-                    d = garde
-                scene_carte(txt, d, seg, travail, flash=bool(segments))
-                impacts.append((t, "boom"))
-                print(f"  {t:5.1f}s  carte  {txt}")
+            if sc["type"] == "video":
+                scene_video(sc["fichier"], d, seg, i % 2, flash=bool(segments))
+                impacts.append((sc["debut"], "souffle"))
+                ambiances.append((sc["debut"], d, sc["fichier"]))
+                print(f"  {sc['debut']:5.1f}s  video  {sc['hauteur']}p  {sc['desc'][:50]}")
+            else:
+                scene_carte(sc["carte"], d, seg, travail, flash=bool(segments))
+                impacts.append((sc["debut"], "boom"))
+                print(f"  {sc['debut']:5.1f}s  carte  {sc['carte']}")
             segments.append((seg, d))
-            t += d
-        if t < duree:                          # la voix ne doit jamais tomber dans le vide
-            seg = travail / "segfin.mp4"
-            scene_carte(index.get("chaine", ""), duree - t, seg, travail)
-            segments.append((seg, duree - t))
-            impacts.append((t, "boom"))
 
         liste = travail / "liste.txt"
         liste.write_text("".join(f"file '{p.as_posix()}'\n" for p, _ in segments), encoding="utf-8")
@@ -462,12 +696,12 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
                        check=True, capture_output=True)
 
         ass = base.with_suffix(".ass")
-        C.sous_titres(mots, s, e, ass, clip.get("accroche", ""))
+        C.sous_titres(mots_corr, s, e, ass, clip.get("accroche", ""))
         ass_ff = str(ass).replace("\\", "/").replace(":", r"\:")
         fonts_ff = str(C.FONTS_DIR).replace("\\", "/").replace(":", r"\:")
         dst = base.with_suffix(".mp4")
         # un clic discret a chaque nouveau groupe de mots : l'oreille suit la lecture
-        for g in C.grouper(C.mots_dans(mots, s, e)):
+        for g in C.grouper(C.mots_dans(mots_corr, s, e)):
             impacts.append((max(0.0, g[0]["s"] - s), "clic"))
         sfx, amb, basse = travail / "sfx.wav", travail / "amb.wav", travail / "basse.wav"
         piste_sfx(impacts, duree, sfx)
@@ -521,13 +755,131 @@ def habiller(vid: str, numero: int, replan: bool = False) -> Path:
     return dst
 
 
+# ------------------------------------------------------------------ incrustation
+# L'invite reste a l'ecran ; des plans viennent par moments par-dessus son image,
+# puis repartent. Le montage integral (habiller) retirait l'humain : 48 s d'images
+# de banque sur une voix, ca se lit comme une video faite par une IA (04/10).
+INCRUSTE_DEPUIS = 10.0       # les dix premieres secondes restent sur l'invite
+INCRUSTE_MAX = 3.5           # une incrustation ne dure jamais plus
+CARRE_Y = C.FG_Y             # le carre 1080x1080 ou l'invite apparait dans le clip brut
+
+
+def incruster(vid: str, numero: int, replan: bool = False) -> Path:
+    """Pose des plans d'illustration sur le clip BRUT, dans le carre de l'invite :
+    l'accroche en haut et les sous-titres en bas restent toujours visibles.
+
+    Si aucune image ne convient a une phrase, on ne met rien : l'invite reste. C'est
+    ce qui manquait au montage integral, oblige de remplir chaque seconde."""
+    src = C.SRC / f"{vid}.mp4"
+    index = json.loads((C.OUT / f"{vid}.json").read_text(encoding="utf-8"))
+    brut = C.OUT / index["clips"][numero - 1]["fichier"]
+    choix = json.loads(src.with_suffix(".clips.json").read_text(encoding="utf-8"))
+    clip = choix[numero - 1]
+    mots = C.recoller(json.loads(src.with_suffix(".words.json").read_text(encoding="utf-8")))
+    s, e = C.caler(clip, mots, C.phrases(mots), C.scenes(src))
+    duree = e - s
+    print(f"[incrustation] {clip['titre']} · {duree:.0f}s")
+
+    segs = segmenter(C.mots_dans(mots, s, e), s, duree)
+    cache = src.with_suffix(f".plan{numero}.v2.json")
+    plan = None
+    if cache.exists() and not replan:
+        lu = json.loads(cache.read_text(encoding="utf-8"))
+        if lu.get("segments") == [sg["texte"] for sg in segs]:
+            plan = lu["plan"]
+            print("[plan] relu depuis le cache")
+    if plan is None:
+        plan = planifier(segs, index.get("titre", vid))
+        cache.write_text(json.dumps({"segments": [sg["texte"] for sg in segs], "plan": plan},
+                                    ensure_ascii=False, indent=1), encoding="utf-8")
+
+    # Une incrustation par segment au plus, jamais deux segments de suite : le
+    # retour a l'invite entre deux plans est ce qui garde la video humaine.
+    moments, dernier = [], -2
+    for k, (sg, p) in enumerate(zip(segs, plan)):
+        if sg["debut"] < INCRUSTE_DEPUIS or k == dernier + 1:
+            continue
+        texte = (p.get("texte") or sg["texte"]).strip()
+        a, b = sg["debut"], min(sg["fin"], sg["debut"] + INCRUSTE_MAX)
+        if b - a < 1.5:
+            continue
+        carte = (p.get("carte") or "").strip().upper()
+        if p.get("visuel") == "carte" and carte and _dit(carte, texte):
+            moments.append({"type": "carte", "carte": carte, "texte": texte,
+                            "debut": a, "fin": min(b, a + lisible(carte))})
+        elif p.get("requete"):
+            moments.append({"type": "video", "requete": p["requete"], "texte": texte,
+                            "large": p.get("large", ""), "debut": a, "fin": b})
+        else:
+            continue
+        dernier = k
+
+    SORTIE.mkdir(exist_ok=True)
+    dst = SORTIE / f"{Path(brut).stem}_incruste.mp4"
+    with tempfile.TemporaryDirectory() as tmp:
+        travail = Path(tmp)
+        pool = {i: c for i, m in enumerate(moments)
+                if m["type"] == "video" and (c := candidats(m["requete"], m["large"]))}
+        verdict = juger(moments, pool)
+        poses = []                              # (moment, fichier, decalage du recadrage)
+        for i, m in enumerate(moments):
+            d = m["fin"] - m["debut"]
+            seg = travail / f"inc{i:02d}.mp4"
+            if m["type"] == "carte":
+                scene_carte(m["carte"], d, seg, travail)
+                # la carte est dessinee centree sur CARTE_Y : on garde le carre autour
+                poses.append((m, seg, CARTE_Y - 540))
+                print(f"  {m['debut']:5.1f}s  carte  {m['carte']}")
+                continue
+            j, cands = verdict.get(i, 0), pool.get(i, [])
+            if not 1 <= j <= len(cands) or cands[j - 1]["id"] in _pris:
+                print(f"  {m['debut']:5.1f}s  (l'invite reste : aucune image ne convient)")
+                continue
+            c, source = cands[j - 1], travail / f"src{i:02d}.mp4"
+            if not _telecharger(c["lien"], source):
+                continue
+            _pris.add(c["id"])
+            scene_video(source, d, seg, i % 2)
+            poses.append((m, seg, (C.H - 1080) // 2))
+            print(f"  {m['debut']:5.1f}s  video  {c['hauteur']}p  {c['desc'][:50]}")
+
+        cmd = ["ffmpeg", "-y", "-i", str(brut)]
+        fc, base = [], "0:v"
+        for k, (m, seg, oy) in enumerate(poses, 1):
+            cmd += ["-i", str(seg)]
+            a, b = m["debut"], m["fin"]
+            fc.append(f"[{k}:v]setpts=PTS-STARTPTS+{a:.3f}/TB,crop=1080:1080:0:{oy},"
+                      f"{ETALON}[i{k}]")
+            fc.append(f"[{base}][i{k}]overlay=0:{CARRE_Y}:enable='between(t,{a:.3f},{b:.3f})'"
+                      f":eof_action=pass[v{k}]")
+            base = f"v{k}"
+        # Le son des sources Thinkerview sort a -21 LUFS : ramene a -14, comme
+        # l'habillage, faute de quoi la video passe 7 dB sous les autres Shorts.
+        fc.append("[0:a]loudnorm=I=-14:TP=-1.0:LRA=11,aresample=48000[a]")
+        sortie_v = f"[{base}]" if poses else "0:v"
+        r = subprocess.run(cmd + ["-filter_complex", ";".join(fc), "-map", sortie_v, "-map", "[a]",
+                                  "-c:v", "libx264", "-crf", "18",
+                                  "-preset", os.environ.get("CLIPPER_X264_PRESET", "medium"),
+                                  "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+                                  "-movflags", "+faststart", str(dst)],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if r.returncode:
+            raise RuntimeError(r.stderr[-1200:])
+    couvert = sum(m["fin"] - m["debut"] for m, _, _ in poses)
+    print(f"-> {dst}  ({len(poses)} incrustations, {100 * couvert / duree:.0f} % du temps)")
+    return dst
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
     vid = sys.argv[1]
     numero = int(sys.argv[sys.argv.index("--clip") + 1]) if "--clip" in sys.argv else 1
-    habiller(vid, numero, "--replan" in sys.argv)
+    if "--incruste" in sys.argv:
+        incruster(vid, numero, "--replan" in sys.argv)
+    else:
+        habiller(vid, numero, "--replan" in sys.argv)
     return 0
 
 
