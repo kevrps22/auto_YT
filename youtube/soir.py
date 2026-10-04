@@ -218,6 +218,16 @@ def approvisionner(simuler: bool = False) -> None:
         return
     index = G.recuperer(vid)
     trace(f"{len(index['clips'])} clips recuperes")
+    if P.format_publie() == "brut":
+        # En format brut, la source ne sert plus a rien une fois les clips rendus :
+        # on publie les extraits tels quels. La garder jusqu'a la derniere
+        # publication immobilisait 2,8 Go pendant deux jours sur une carte de 15.
+        # (Les formats montes, eux, reprennent sa bande-son : ils la conservent.)
+        source = C.SRC / f"{vid}.mp4"
+        if source.exists():
+            taille = source.stat().st_size
+            source.unlink()
+            trace(f"source supprimee apres recuperation : {taille / 1e9:.2f} Go liberes")
 
 
 # ------------------------------------------------------------------ publication
