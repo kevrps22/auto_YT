@@ -1,14 +1,13 @@
-edge-tts>=6.1.0
 faster-whisper>=1.0.0
 # PyAV 19 a supprime le parametre metadata_errors que faster-whisper
 # passe encore : sans cette borne, toute transcription echoue
 av>=12.0.0,<19
 requests>=2.31.0
 google-genai>=1.0.0
-# Upload (optionnel, seulement pour upload.py)
+# Publication et lecture des statistiques YouTube
 google-api-python-client>=2.100.0
 google-auth-oauthlib>=1.2.0
 google-auth-httplib2>=0.2.0
-# Clipper (decoupe de videos longues + page locale)
+# Telechargement des sources et page locale
 yt-dlp>=2026.1.1
 flask>=3.0

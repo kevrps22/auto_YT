@@ -41,7 +41,6 @@ auto_YT/
 │   └── requirements-cloud.txt   dépendances minimales du workflow
 ├── youtube/
 │   ├── upload.py        envoi OAuth ; chemins ancrés sur la racine du dépôt
-│   ├── daily_upload.py  une vidéo par jour, pensé pour un nano-ordinateur
 │   ├── analytics.py     YouTube Analytics API : rétention, APV, sources de trafic
 │   └── dashboard.py     tableau de bord local
 ├── assets/fonts/        Montserrat Black + Bold + licence OFL
@@ -228,8 +227,6 @@ ancreraient le format du côté du commentaire à valeur ajoutée sans ambiguït
    les cartes typographiques sont le repli.
 3. **Quota Gemini** : 20 requêtes/jour par modèle, 8 modèles accessibles
    (`gemini-3.8-flash` donne les meilleurs choix). Le repli couvre 429, 404 et 503.
-4. `youtube/daily_upload.py` attend encore l'ancienne bibliothèque
-   `output/lib/*/meta.json` : **à adapter à l'index de Clipper**.
 5. La source doit être en Creative Commons. Le stock de chaînes utilisables
    (Thinkerview et assimilés) est à étoffer à la main.
 

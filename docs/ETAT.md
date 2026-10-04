@@ -71,8 +71,6 @@ La publication reste **manuelle, depuis le PC de la maison**, tous les soirs.
 - **Orange Pi Zero 3** commandé le 17/09/2026, livraison 25/09 → 02/10 : Debian
   sur carte SD, SSH, copie des trois fichiers de secrets, jeton GitHub à portée
   limitée, tâche du soir, veto depuis le téléphone.
-- **`youtube/daily_upload.py`** attend encore l'ancienne bibliothèque
-  `output/lib/*/meta.json` : à brancher sur l'index de Clipper.
 - **Niveaux sonores** de l'habillage à valider à l'oreille : `VOL_MUSIQUE`,
   `VOL_SFX` en tête de `habiller.py`, et le gain 0,22 dans `piste_ambiance`.
 - **Intro et conclusion dites par Kevin** — question ouverte, ça lèverait toute
