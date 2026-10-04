@@ -1,34 +1,50 @@
-# Attends Quoi ?! — fabrique de Shorts
+# Clipper — des Shorts à partir d'entretiens libres
 
-Découpe des vidéos longues sous licence libre en Shorts, et les remonte en vidéos
-explicatives. Chaîne : [@Attends_Quoi](https://www.youtube.com/@Attends_Quoi).
+Découpe une vidéo longue sous licence Creative Commons en extraits verticaux, puis
+remonte chaque extrait en vidéo explicative : **la voix de l'invité est conservée,
+l'image est entièrement refabriquée**.
 
-`lien YouTube → transcription → choix des moments (Gemini) → clips verticaux → montage explicatif`
+```
+lien YouTube → transcription → choix des moments → extraits verticaux → montage explicatif → publication
+```
 
-Tout tourne avec des outils gratuits : Gemini, Pexels, FFmpeg, faster-whisper,
-GitHub Actions. Aucun abonnement, aucune carte bancaire.
+Tout repose sur des outils gratuits : Gemini pour le choix éditorial, faster-whisper
+pour la transcription, Pexels pour les illustrations, FFmpeg pour le rendu, GitHub
+Actions pour le calcul. Aucun abonnement.
+
+## Comment c'est réparti
+
+Trois machines, chacune pour ce qu'elle seule peut faire :
+
+| | Rôle | Pourquoi |
+|---|---|---|
+| **Une machine à la maison** | télécharger la source, publier | YouTube bloque les téléchargements depuis les serveurs, et les publications faites depuis un centre de données se font brider |
+| **GitHub Actions** | transcrire, choisir, rendre les extraits | deux heures d'audio se transcrivent en 40 min là-bas, contre une nuit sur un nano-ordinateur |
+| **Un nano-ordinateur** | orchestrer, habiller, publier chaque soir | il reste allumé, un PC non |
+
+Le tout tourne sans intervention : deux tâches `systemd`, une le matin pour
+reconstituer le stock, une le soir pour publier.
 
 ## Organisation
 
 ```
-auto_YT/
-├─ clipper/          le cœur
+├─ clipper/
 │   ├─ clipper.py       découpe : calage image + phrase, sous-titres, rendu
-│   ├─ habiller.py      remonte un clip en vidéo explicative (la voix est gardée)
-│   ├─ pipeline.py      enchaîne téléchargement → transcription → choix → rendu
+│   ├─ habiller.py      remonte un extrait en vidéo explicative
+│   ├─ pipeline.py      téléchargement → transcription → choix → rendu
 │   ├─ transcribe.py    transcription mot à mot (faster-whisper)
-│   ├─ cloud.py         point d'entrée du rendu sur GitHub
+│   ├─ cloud.py         point d'entrée du rendu sur GitHub Actions
 │   ├─ github_io.py     déposer une source, lancer, suivre, récupérer
-│   └─ web.py + web/    page locale (port 8765), utilisable depuis le téléphone
-├─ youtube/          publication et mesure
+│   └─ web.py + web/    page locale (port 8765), utilisable depuis un téléphone
+├─ youtube/
+│   ├─ soir.py          le pilote : approvisionne le stock, publie un clip par soir
+│   ├─ publier.py       publie un extrait de l'index, avec ses garde-fous
 │   ├─ upload.py        envoi OAuth (YouTube Data API v3)
-│   ├─ daily_upload.py  publie une vidéo par jour
-│   ├─ analytics.py     rétention réelle seconde par seconde, APV
-│   └─ dashboard.py     tableau de bord local des statistiques
-├─ assets/           polices (Montserrat, OFL) et musique de fond
-├─ media/            sources, clips, rendus — hors dépôt, des gigaoctets
-├─ docs/             ARCHITECTURE.md (décisions, mesures) · ETAT.md (reprise)
-└─ app/              « YT Studio », application Flutter Windows
+│   └─ analytics.py     rétention réelle seconde par seconde
+├─ assets/              polices (Montserrat, licence OFL) et musique de fond
+├─ media/               sources, extraits, rendus — hors dépôt, des gigaoctets
+├─ docs/                ARCHITECTURE.md · ORANGE_PI.md · ETAT.md
+└─ .github/workflows/   le rendu sur GitHub Actions
 ```
 
 ## Installation
@@ -37,48 +53,38 @@ auto_YT/
 pip install -r requirements.txt
 ```
 
-FFmpeg doit être installé et dans le PATH : `winget install Gyan.FFmpeg`.
+FFmpeg doit être installé et accessible dans le PATH.
 
-Trois fichiers ne sont jamais commités et sont à recréer sur une nouvelle machine
-— voir [docs/ETAT.md](docs/ETAT.md) : `.env`, `client_secret.json`, `token.json`.
+Trois fichiers ne sont jamais versionnés et sont à créer : `.env` (clés Gemini,
+Pexels et YouTube), `client_secret.json` et `token.json` (OAuth YouTube). Le détail
+est dans [docs/ETAT.md](docs/ETAT.md), l'installation du nano-ordinateur dans
+[docs/ORANGE_PI.md](docs/ORANGE_PI.md).
 
 ## Utilisation
 
-La page locale fait tout, à partir d'un lien YouTube :
+La page locale fait tout à partir d'un lien :
 
 ```bash
 python clipper/web.py
 ```
 
-En ligne de commande, sur une source déjà téléchargée dans `media/src` :
+En ligne de commande :
 
 ```bash
-python clipper/clipper.py media/src/ID.mp4 --n 8 --titre "titre de la source"
+python clipper/github_io.py envoyer "https://www.youtube.com/watch?v=ID"   # rendu déporté
+python clipper/habiller.py ID --clip 2                                     # montage explicatif
+python youtube/soir.py --etat                                              # stock et journal
+python youtube/analytics.py --hook                                         # courbes de rétention
 ```
 
-Rendu sur GitHub (le téléchargement reste ici, YouTube bloque les serveurs) :
+Chaque commande qui publie accepte `--simuler` : elle montre ce qu'elle ferait sans
+rien envoyer.
 
-```bash
-python clipper/github_io.py envoyer "https://www.youtube.com/watch?v=ID" --n 8
-```
+## Licences
 
-Remonter un clip en vidéo explicative :
+Le projet ne traite que des sources en **Creative Commons Attribution (CC BY)**.
+Un extrait issu d'une autre licence est marqué non publiable et la publication est
+refusée. Chaque vidéo produite crédite l'auteur et la source dans sa description —
+c'est une obligation de la licence, pas une politesse.
 
-```bash
-python clipper/habiller.py ID --clip 7
-```
-
-Lire les vraies courbes de rétention :
-
-```bash
-python youtube/analytics.py --hook
-```
-
-## Trois règles apprises à la dure
-
-- **Une vidéo par jour, publiée depuis la maison.** Les envois faits depuis les
-  serveurs GitHub ont fait brider la chaîne, et le lot programmé d'août 2026 a
-  divisé les vues par quatre — le contenu n'y était pour rien.
-- **Sources en Creative Commons uniquement**, crédit dans la description. Les
-  clips issus d'une autre licence sont marqués non publiables par `publiable()`.
-- **Ne jamais juger une vidéo avant 48 h.** Les vues arrivent par vagues.
+Les polices Montserrat sont sous licence SIL Open Font.
