@@ -19,7 +19,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -160,19 +160,31 @@ def deposer(rel: dict, fichier: Path) -> None:
     print(f"  envoye en {time.time() - t0:.0f} s", flush=True)
 
 
+# Instant de lancement, par video. Sans lui, suivre() tombait sur un rendu
+# PRECEDENT de la meme video — le nouveau met quelques secondes a apparaitre — et
+# annoncait l'echec d'hier alors que celui du jour demarrait a peine.
+_lance_a: dict[str, str] = {}
+
+
 def lancer(vid: str, n: int = 4, rechoisir: bool = False) -> None:
+    depart = datetime.now(timezone.utc) - timedelta(seconds=60)   # marge d'horloge
     _api("POST", f"/actions/workflows/{WORKFLOW}/dispatches", json={
         "ref": BRANCHE, "inputs": {"video_id": vid, "n": str(n),
                                    "rechoisir": "true" if rechoisir else "false"}})
+    _lance_a[vid] = depart.strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"Rendu lance sur GitHub pour {vid}.")
 
 
 def dernier_run(vid: str) -> dict | None:
     runs = _api("GET", f"/actions/workflows/{WORKFLOW}/runs",
                 params={"event": "workflow_dispatch", "per_page": 20}).json()
+    apres = _lance_a.get(vid)
     for run in runs.get("workflow_runs", []):
-        if vid in (run.get("display_title") or ""):
-            return run
+        if vid not in (run.get("display_title") or ""):
+            continue
+        if apres and run["created_at"] < apres:
+            continue                       # rendu anterieur au notre : pas le notre
+        return run
     return None
 
 
