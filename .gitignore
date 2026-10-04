@@ -21,10 +21,3 @@ __pycache__/
 *.pyc
 .venv/
 .probe_cache/
-
-# --- app Flutter : artefacts recrees par `flutter build` ---
-app/build/
-app/.dart_tool/
-app/windows/flutter/ephemeral/
-app/.flutter-plugins*
-*.iml

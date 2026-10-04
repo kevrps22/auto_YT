@@ -47,7 +47,6 @@ auto_YT/
 ├── assets/music/bg.mp3  lit de musique de fond
 ├── media/               src/ out/ out_habille/ opus/ — hors dépôt (3 Go)
 ├── docs/                ce document, ETAT.md, opus_map.json
-├── app/                 « YT Studio », Flutter Windows
 └── .github/workflows/clipper.yml
 ```
 
