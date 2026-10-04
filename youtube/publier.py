@@ -17,6 +17,7 @@ Le journal des publications est dans media/publies.json.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from datetime import date
@@ -35,6 +36,14 @@ from upload import load_creds  # noqa: E402
 JOURNAL = C.MEDIA / "publies.json"
 
 
+def format_publie() -> str:
+    """« brut » (l'extrait tel quel) ou « habille » (montage explicatif), selon
+    CLIPPER_FORMAT dans le .env. Brut par defaut : c'est le format qui a fait les
+    vues de la chaine. Le 04/10, l'habillage a failli partir sans avoir ete valide
+    — changer de format doit etre un choix, jamais un effet de bord."""
+    return "habille" if os.environ.get("CLIPPER_FORMAT", "").strip().lower() == "habille" else "brut"
+
+
 def _journal() -> dict:
     return json.loads(JOURNAL.read_text(encoding="utf-8")) if JOURNAL.exists() else {}
 
@@ -47,9 +56,9 @@ def index(vid: str) -> dict:
 
 
 def fichier(idx: dict, clip: dict, brut: bool = False) -> Path:
-    """La version habillee si elle existe : c'est elle qui porte l'apport original
-    exige pour la monetisation. Le clip brut n'est qu'un repli de test."""
-    if not brut:
+    """La version habillee si le format le demande ET qu'elle existe, sinon
+    l'extrait brut."""
+    if not brut and format_publie() == "habille":
         habille = C.OUT_HABILLE / (Path(clip["fichier"]).stem + "_explique.mp4")
         if habille.exists():
             return habille
@@ -143,6 +152,7 @@ def publier(vid: str, n: int, brut: bool = False, prive: bool = False,
 
 
 def main() -> int:
+    C.charger_env()
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
         print(__doc__)

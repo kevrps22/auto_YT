@@ -311,7 +311,9 @@ def publier(simuler: bool = False) -> None:
     trace(f"choisi : [{n}] score {score} — {clip.get('titre', '')[:50]} ({vid})")
 
     habille = C.OUT_HABILLE / (Path(clip["fichier"]).stem + "_explique.mp4")
-    if not habille.exists():
+    if P.format_publie() == "brut":
+        trace("format brut : l'extrait part tel quel, sans habillage")
+    elif not habille.exists():
         trace("habillage en cours (compter 20 a 30 min sur le Pi)")
         if simuler:
             trace("--simuler : habillage saute")
