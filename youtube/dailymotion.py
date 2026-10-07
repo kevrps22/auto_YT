@@ -56,6 +56,11 @@ def publier(vid: str, n: int, simuler: bool = False) -> str:
     if cle in jrn:
         print(f"Dailymotion : deja publie le {jrn[cle]['date']}")
         return jrn[cle]["url"]
+    auj = datetime.now().date().isoformat()
+    du_jour = sum(1 for v in jrn.values() if v.get("date", "").startswith(auj))
+    if du_jour >= P.par_jour():
+        print(f"Dailymotion : deja {du_jour} publication(s) aujourd'hui, maximum {P.par_jour()}")
+        return ""
     video = P.fichier(idx, clip)
     titre, desc = P.texte(idx, clip)
     titre = titre.replace("#Shorts", "").strip()[:255]
