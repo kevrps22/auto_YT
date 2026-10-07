@@ -1,0 +1,3 @@
+# Sources a traiter, dans l'ordre (identifiant YouTube ou lien, une par ligne).
+# Tout ce qui suit un # est ignore. Vide : le Pi prend l'entretien CC le plus vu.
+# Criteres : invite clivant ou connu, colere / accusation / revelation, sujet du quotidien.

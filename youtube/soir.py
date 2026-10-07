@@ -42,6 +42,9 @@ CLIPS_PAR_SOURCE = 4
 JOURNAL = C.MEDIA / "publies.json"
 VERROU = C.MEDIA / "soir.lock"
 LOG = C.MEDIA / "soir.log"
+# Les sources choisies a la main, une par ligne (identifiant ou lien), dans
+# l'ordre ou les traiter. Vide ou absent : on retombe sur la plus vue.
+SOURCES = RACINE / "sources.txt"
 
 
 def trace(msg: str) -> None:
@@ -178,7 +181,24 @@ def candidates() -> list[dict]:
                 continue
             out.append({"id": v["id"], "titre": v["snippet"]["title"],
                         "vues": int(v["statistics"].get("viewCount", 0))})
-    return sorted(out, key=lambda x: -x["vues"])
+    out.sort(key=lambda x: -x["vues"])
+    # La plus vue ne fait pas la plus virale : Giraud (1,7 M de vues) a donne
+    # des clips a 1 500, Ferrari des clips a 24 000. La liste choisie passe devant.
+    rang = {v: i for i, v in enumerate(sources_choisies())}
+    return sorted(out, key=lambda x: rang.get(x["id"], len(rang)))
+
+
+def sources_choisies() -> list[str]:
+    import re
+    if not SOURCES.exists():
+        return []
+    ids = []
+    for ligne in SOURCES.read_text(encoding="utf-8").splitlines():
+        ligne = ligne.split("#")[0].strip()
+        m = re.search(r"(?:v=|youtu\.be/)?([\w-]{11})$", ligne)
+        if m:
+            ids.append(m.group(1))
+    return ids
 
 
 def _secondes(iso: str) -> int:
@@ -347,8 +367,17 @@ def publier(simuler: bool = False) -> None:
                                  "fichier": habille.name, "note": "retrouve sur la chaine"}
             ecrire_journal(jrn)
         return
-    P.publier(vid, n, simuler=simuler)
+    url = P.publier(vid, n, simuler=simuler)
     trace("publication terminee")
+    # Dailymotion en bonus, AVANT le menage qui efface le clip. Son echec ne
+    # doit jamais faire croire que la soiree a rate : YouTube est deja parti.
+    import dailymotion as D
+    if D.actif() and (url or simuler):
+        try:
+            D.publier(vid, n, simuler=simuler)
+            trace("dailymotion : publie")
+        except Exception as e:                      # noqa: BLE001
+            trace(f"DAILYMOTION IMPOSSIBLE ({type(e).__name__}: {str(e)[:120]})")
     menage(simuler)          # le clip publie et sa version habillee ne servent plus
 
 
