@@ -375,7 +375,7 @@ def publier(simuler: bool = False) -> None:
     if D.actif() and (url or simuler):
         try:
             D.publier(vid, n, simuler=simuler)
-            trace("dailymotion : publie")
+            trace("dailymotion : " + ("simule" if simuler else "publie"))
         except Exception as e:                      # noqa: BLE001
             trace(f"DAILYMOTION IMPOSSIBLE ({type(e).__name__}: {str(e)[:120]})")
     menage(simuler)          # le clip publie et sa version habillee ne servent plus
