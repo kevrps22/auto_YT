@@ -40,7 +40,6 @@ CHAINE_SOURCE = "@thinkerview"
 DUREE_MIN, DUREE_MAX = 20 * 60, 3 * 3600
 CLIPS_PAR_SOURCE = 4
 JOURNAL = C.MEDIA / "publies.json"
-VERROU = C.MEDIA / "soir.lock"
 LOG = C.MEDIA / "soir.log"
 # Les sources choisies a la main, une par ligne (identifiant ou lien), dans
 # l'ordre ou les traiter. Vide ou absent : on retombe sur la plus vue.
@@ -56,20 +55,29 @@ def trace(msg: str) -> None:
 
 
 class Verrou:
-    """Empeche deux executions de se chevaucher — un approvisionnement qui traine
-    ne doit pas croiser la publication du soir. Un verrou de plus de 6 h est
-    considere comme abandonne (coupure de courant en plein travail)."""
+    """Empeche deux executions de la MEME tache de se chevaucher. Un verrou de plus
+    de 6 h est considere comme abandonne (coupure de courant en plein travail).
+
+    Deux verrous et pas un : le 08/10, l'approvisionnement lance a 9 h (source a
+    telecharger puis a rendre sur GitHub) tenait encore le verrou commun a midi,
+    et la publication de 12 h a ete sautee. Les deux taches ne se genent pas : le
+    menage ne touche qu'aux sources deja indexees, et la nouvelle ne l'est qu'a
+    la toute fin de l'approvisionnement."""
+
+    def __init__(self, tache: str):
+        self.f = C.MEDIA / f"{tache}.lock"
 
     def __enter__(self):
-        if VERROU.exists() and time.time() - VERROU.stat().st_mtime < 6 * 3600:
-            sys.exit(f"Une autre execution est en cours depuis "
-                     f"{(time.time() - VERROU.stat().st_mtime) / 60:.0f} min.")
-        VERROU.parent.mkdir(parents=True, exist_ok=True)
-        VERROU.write_text(str(os.getpid()), encoding="utf-8")
+        if self.f.exists() and time.time() - self.f.stat().st_mtime < 6 * 3600:
+            trace(f"{self.f.stem} deja en cours depuis "
+                  f"{(time.time() - self.f.stat().st_mtime) / 60:.0f} min : on s'arrete")
+            sys.exit(1)
+        self.f.parent.mkdir(parents=True, exist_ok=True)
+        self.f.write_text(str(os.getpid()), encoding="utf-8")
         return self
 
     def __exit__(self, *_):
-        VERROU.unlink(missing_ok=True)
+        self.f.unlink(missing_ok=True)
 
 
 # ------------------------------------------------------------------ etat du stock
@@ -400,16 +408,16 @@ def main() -> int:
     if "--etat" in sys.argv:
         etat()
     elif "--menage" in sys.argv:
-        with Verrou():
+        with Verrou("publier"):
             menage(simuler)
     elif "--recoler" in sys.argv:
-        with Verrou():
+        with Verrou("publier"):
             recoler(simuler)
     elif "--approvisionner" in sys.argv:
-        with Verrou():
+        with Verrou("approvisionner"):
             approvisionner(simuler)
     elif "--publier" in sys.argv:
-        with Verrou():
+        with Verrou("publier"):
             publier(simuler)
     else:
         print(__doc__)
