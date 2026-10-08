@@ -170,10 +170,44 @@ def analytics() -> list[dict]:
         return []
 
 
+def analytics_detail() -> dict:
+    """Retention par Short, provenance des vues, audience (age, sexe, pays)."""
+    try:
+        from googleapiclient.discovery import build
+        from upload import load_creds
+        rep = build("youtubeAnalytics", "v2", credentials=load_creds(),
+                    cache_discovery=False).reports()
+        fin = date.today()
+
+        def q(jours: int, **kw) -> list[dict]:
+            r = rep.query(ids="channel==MINE", startDate=str(fin - timedelta(days=jours)),
+                          endDate=str(fin), **kw).execute()
+            cols = [c["name"] for c in r["columnHeaders"]]
+            return [dict(zip(cols, l)) for l in r.get("rows", [])]
+
+        videos = q(365, dimensions="video", metrics="views,averageViewPercentage,"
+                   "averageViewDuration", sort="-views", maxResults=200)
+        return {
+            "retention": {v["video"]: {"pourcentage": round(v["averageViewPercentage"], 1),
+                                       "duree": round(v["averageViewDuration"])}
+                          for v in videos},
+            "trafic": q(28, dimensions="insightTrafficSourceType", metrics="views",
+                        sort="-views"),
+            "age_sexe": q(90, dimensions="ageGroup,gender", metrics="viewerPercentage"),
+            "pays": q(28, dimensions="country", metrics="views", sort="-views", maxResults=8),
+        }
+    except (Exception, SystemExit) as e:        # noqa: BLE001
+        print(f"Analytics detaille indisponible ({type(e).__name__}: {str(e)[:80]})")
+        return {}
+
+
 # ------------------------------------------------------------------ cote Pi
 def sources_par_clip() -> dict[str, dict]:
     """Titre normalise -> source (invite, id). Tous les index du Pi, publies ou non."""
-    out = {}
+    # les clips faits sur le PC, avant le Pi : le Pi n'a pas leurs index
+    connues = RACINE / "youtube" / "sources_connues.json"
+    out = {_nu(t): v for t, v in json.loads(connues.read_text(encoding="utf-8")).items()
+           } if connues.exists() else {}
     for f in sorted(C.OUT.glob("*.json")):
         try:
             idx = json.loads(f.read_text(encoding="utf-8"))
@@ -288,6 +322,7 @@ def relever(ancien: dict) -> dict:
 
     stats["clips"] = sorted(clips.values(), key=lambda c: c["date"], reverse=True)
     stats["analytics"] = analytics() or ancien.get("analytics", [])
+    stats["detail"] = analytics_detail() or ancien.get("detail", {})
     try:
         stats["commentaires"] = commentaires(yt_ch["id"], {c["id"]: c["titre"]
                                                            for c in clips.values()})
