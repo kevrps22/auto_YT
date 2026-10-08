@@ -207,3 +207,40 @@ Le journal `media/publies.json` empêche de publier deux fois le même clip ou d
 fois le même jour. Si le courant saute **entre** l'envoi à YouTube et l'écriture du
 journal, `--publier` rattrape le coup : il compare le titre aux 15 dernières vidéos
 de la chaîne avant d'envoyer, et répare le journal s'il le trouve déjà en ligne.
+
+## Stats pour l'appli mobile
+
+`youtube/stats.py` releve toutes les heures les vues YouTube + Dailymotion et les
+publie dans `stats.json` sur la branche `stats` (lue par l'appli « Stats Shorts »).
+
+`/etc/systemd/system/clipper-stats.service` :
+
+```ini
+[Unit]
+Description=Releve des stats pour l'appli
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=kevin
+WorkingDirectory=/home/kevin/auto_YT
+ExecStart=/home/kevin/auto_YT/.venv/bin/python youtube/stats.py
+```
+
+`/etc/systemd/system/clipper-stats.timer` :
+
+```ini
+[Unit]
+Description=Stats toutes les heures
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now clipper-stats.timer
+```
