@@ -323,6 +323,8 @@ def relever(ancien: dict) -> dict:
     stats["clips"] = sorted(clips.values(), key=lambda c: c["date"], reverse=True)
     stats["analytics"] = analytics() or ancien.get("analytics", [])
     stats["detail"] = analytics_detail() or ancien.get("detail", {})
+    import dm_revenus
+    stats["dm_revenus"] = dm_revenus.releve()
     try:
         stats["commentaires"] = commentaires(yt_ch["id"], {c["id"]: c["titre"]
                                                            for c in clips.values()})
