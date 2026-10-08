@@ -98,11 +98,20 @@ def dailymotion() -> tuple[dict, list[dict]]:
     nom = os.environ.get("DM_CHANNEL")
     if not nom:
         return {}, []
-    u = requests.get(f"{DM}/user/{nom}", timeout=30,
+    # L'API publique est en retard (le 08/10 : 2 vues et l'ancien titre, quand le
+    # Studio en montrait 45) : avec la cle privee, on lit les chiffres du Studio.
+    base, h = DM, {}
+    try:
+        import dailymotion as D
+        if D.actif():
+            base, h = D.API + "/rest", {"Authorization": f"Bearer {D._jeton()}"}
+    except Exception as e:                       # noqa: BLE001
+        print(f"Dailymotion : cle privee refusee ({type(e).__name__}), API publique")
+    u = requests.get(f"{base}/user/{nom}", timeout=30, headers=h,
                      params={"fields": "followers_total"}).json()
     videos, page = [], 1
     while page and page <= 10:
-        r = requests.get(f"{DM}/user/{nom}/videos", timeout=30, params={
+        r = requests.get(f"{base}/user/{nom}/videos", timeout=30, headers=h, params={
             "fields": "id,title,created_time,views_total,likes_total",
             "limit": 100, "page": page}).json()
         for v in r.get("list", []):
