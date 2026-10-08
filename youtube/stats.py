@@ -113,12 +113,11 @@ def relever() -> dict:
 
 
 def publier(stats: dict) -> None:
-    depot = G.DEPOT
-    if G._api("GET", f"/repos/{depot}/branches/{BRANCHE}").status_code == 404:
-        sha = G._api("GET", f"/repos/{depot}/git/ref/heads/main").json()["object"]["sha"]
-        G._api("POST", f"/repos/{depot}/git/refs",
+    if G._api("GET", f"/branches/{BRANCHE}").status_code == 404:
+        sha = G._api("GET", f"/git/ref/heads/main").json()["object"]["sha"]
+        G._api("POST", f"/git/refs",
                json={"ref": f"refs/heads/{BRANCHE}", "sha": sha}).raise_for_status()
-    r = G._api("GET", f"/repos/{depot}/contents/{FICHIER}", params={"ref": BRANCHE})
+    r = G._api("GET", f"/contents/{FICHIER}", params={"ref": BRANCHE})
     ancien = r.json() if r.status_code == 200 else None
     historique = []
     if ancien:
@@ -131,7 +130,7 @@ def publier(stats: dict) -> None:
              "content": base64.b64encode(json.dumps(stats, ensure_ascii=False).encode()).decode()}
     if ancien:
         corps["sha"] = ancien["sha"]
-    G._api("PUT", f"/repos/{depot}/contents/{FICHIER}", json=corps).raise_for_status()
+    G._api("PUT", f"/contents/{FICHIER}", json=corps).raise_for_status()
 
 
 def main() -> int:
