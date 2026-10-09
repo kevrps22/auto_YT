@@ -256,6 +256,14 @@ def relever(ancien: dict) -> dict:
     except Exception as e:                       # noqa: BLE001
         print(f"Dailymotion injoignable ({type(e).__name__}) : releve YouTube seule")
         dm_ch, dm = {}, []
+    # L'API YouTube renvoie parfois une liste incomplete (le 09/10 a 6 h : 50
+    # Shorts sur 59, le total a paru chuter de 9 700 vues). Un Short absent garde
+    # ses derniers chiffres connus plutot que de disparaitre.
+    vus = {v["id"] for v in yt}
+    for c in ancien.get("clips", []):
+        if c.get("youtube") and c.get("id") not in vus:
+            yt.append({**c["youtube"], "id": c["id"], "titre": c["titre"], "date": c["date"],
+                       **({"miniature": c["miniature"]} if c.get("miniature") else {})})
     sources = sources_par_clip()
     clips: dict[str, dict] = {}
     for plateforme, liste in (("youtube", yt), ("dailymotion", dm)):
@@ -290,6 +298,15 @@ def relever(ancien: dict) -> dict:
     # --- instantanes horaires, et ce qu'on en deduit (aujourd'hui, 24 h)
     inst = [i for i in ancien.get("instantanes", [])
             if datetime.fromisoformat(i["t"]) > maintenant - timedelta(hours=HEURES_GARDEES)]
+    # un releve ou le total recule est un rate de l'API (les vues ne baissent pas
+    # de 1 % en une heure) : on l'ecarte, il fausserait l'heure et la journee
+    propres = []
+    for i in inst:
+        tot = i.get("youtube", 0) + i.get("dailymotion", 0)
+        if propres and tot < 0.99 * (propres[-1].get("youtube", 0) + propres[-1].get("dailymotion", 0)):
+            continue
+        propres.append(i)
+    inst = propres
     inst.append({"t": stats["maj"], **totaux, "abonnes": yt_ch["abonnes"],
                  "clips": {c["id"]: c["vues"] for c in clips.values()}})
     stats["instantanes"] = inst
