@@ -239,12 +239,18 @@ def approvisionner(simuler: bool = False) -> None:
     if simuler:
         trace("--simuler : la source n'est ni telechargee ni envoyee")
         return
-    vid = G.envoyer(f"https://www.youtube.com/watch?v={src['id']}", CLIPS_PAR_SOURCE)
-    run = G.suivre(vid)
-    if run["conclusion"] != "success":
-        trace(f"ECHEC du rendu GitHub : {run['conclusion']}")
-        return
-    index = G.recuperer(vid)
+    # Le 08/10, un plantage ici n'a laisse aucune trace dans le journal : le stock
+    # est tombe a un clip sans que rien ne le signale. Toute erreur est notee.
+    try:
+        vid = G.envoyer(f"https://www.youtube.com/watch?v={src['id']}", CLIPS_PAR_SOURCE)
+        run = G.suivre(vid)
+        if run["conclusion"] != "success":
+            trace(f"ECHEC du rendu GitHub : {run['conclusion']}")
+            return
+        index = G.recuperer(vid)
+    except Exception as e:                      # noqa: BLE001
+        trace(f"ECHEC de l'approvisionnement ({type(e).__name__}: {str(e)[:160]})")
+        raise
     trace(f"{len(index['clips'])} clips recuperes")
     if P.format_publie() == "brut":
         # En format brut, la source ne sert plus a rien une fois les clips rendus :
