@@ -88,7 +88,7 @@ jobs:
         if: always()
         run: |
           for f in "media/src/$VID.words.json" "media/src/$VID.scenes.txt"; do
-            if [ -f "$f" ]; then gh release upload "$TAG" "$f" --clobber; fi
+            if [ -s "$f" ]; then gh release upload "$TAG" "$f" --clobber; fi
           done
 
       - name: Choix des moments et rendu des clips
