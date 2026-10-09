@@ -392,6 +392,13 @@ def publier(simuler: bool = False) -> None:
             trace("dailymotion : " + ("simule" if simuler else "publie"))
         except Exception as e:                      # noqa: BLE001
             trace(f"DAILYMOTION IMPOSSIBLE ({type(e).__name__}: {str(e)[:120]})")
+    import instagram as I
+    if I.actif() and (url or simuler):
+        try:
+            I.publier(vid, n, simuler=simuler)
+            trace("instagram : " + ("simule" if simuler else "publie"))
+        except Exception as e:                      # noqa: BLE001
+            trace(f"INSTAGRAM IMPOSSIBLE ({type(e).__name__}: {str(e)[:120]})")
     menage(simuler)          # le clip publie et sa version habillee ne servent plus
 
 
