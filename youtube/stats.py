@@ -360,7 +360,9 @@ def relever(ancien: dict) -> dict:
     hist = [h for h in ancien.get("historique", []) if h["date"] < str(minuit.date())]
     # reference de minuit : le dernier instantane d'hier, a defaut le dernier jour connu
     ref = avant_minuit[-1] if avant_minuit else (hist[-1] if hist else None)
-    stats["aujourdhui"] = {p: totaux[p] - ref.get(p, 0) for p in totaux} if ref else None
+    # une plateforme absente du releve de minuit (Instagram, ajoute le 09/10) compte 0
+    # ce jour-la, au lieu de faire passer tout le compte pour des vues du jour
+    stats["aujourdhui"] = {p: totaux[p] - ref[p] if p in ref else 0 for p in totaux} if ref else None
     if ref and "abonnes" in ref:
         stats["aujourdhui"]["abonnes"] = yt_ch["abonnes"] - ref["abonnes"]
     ref24 = il_y_a_24h[-1] if il_y_a_24h else None
