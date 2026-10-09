@@ -42,6 +42,7 @@ DM = "https://api.dailymotion.com"
 BRANCHE, FICHIER = "stats", "stats.json"
 HEURES_GARDEES, JOURS_PAR_CLIP = 48, 60
 CRENEAUX = (12, 19)
+PLATEFORMES = ("youtube", "dailymotion", "instagram")
 
 
 def _nu(t: str) -> str:
@@ -122,6 +123,42 @@ def dailymotion() -> tuple[dict, list[dict]]:
                            "likes": int(v.get("likes_total") or 0)})
         page = page + 1 if r.get("has_more") else None
     return {"abonnes": int(u.get("followers_total") or 0)}, videos
+
+
+def instagram() -> tuple[dict, list[dict]]:
+    """Abonnes et Reels du compte Instagram. Les vues d'un Reel demandent la
+    permission « insights » : sans elle, on garde likes et commentaires."""
+    import instagram as I
+    if not I.actif():
+        return {}, []
+    tok = I.jeton()
+    g = "https://graph.instagram.com/v23.0"
+    moi = requests.get(f"{g}/me", timeout=30, params={
+        "fields": "user_id,username,followers_count,media_count",
+        "access_token": tok}).json()
+    if "error" in moi:
+        raise RuntimeError(moi["error"].get("message"))
+    videos, url = [], f"{g}/me/media"
+    params = {"fields": "id,caption,permalink,timestamp,like_count,comments_count,"
+                        "media_product_type,thumbnail_url", "limit": 50, "access_token": tok}
+    for _ in range(4):
+        r = requests.get(url, timeout=30, params=params).json()
+        for m in r.get("data", []):
+            vues = None
+            ins = requests.get(f"{g}/{m['id']}/insights", timeout=30, params={
+                "metric": "views", "access_token": tok}).json()
+            for x in ins.get("data", []):
+                vues = (x.get("values") or [{}])[0].get("value", x.get("total_value", {}).get("value"))
+            videos.append({"id": m["id"], "titre": (m.get("caption") or "").split("\n")[0],
+                           "url": m.get("permalink", ""),
+                           "date": _local(m["timestamp"].replace("+0000", "+00:00")).isoformat(),
+                           "vues": int(vues or 0), "likes": int(m.get("like_count") or 0),
+                           "commentaires": int(m.get("comments_count") or 0)})
+        url, params = r.get("paging", {}).get("next"), {}
+        if not url:
+            break
+    return {"abonnes": int(moi.get("followers_count") or 0),
+            "compte": moi.get("username", "")}, videos
 
 
 def commentaires(chaine_id: str, titres: dict[str, str]) -> list[dict]:
@@ -256,6 +293,11 @@ def relever(ancien: dict) -> dict:
     except Exception as e:                       # noqa: BLE001
         print(f"Dailymotion injoignable ({type(e).__name__}) : releve YouTube seule")
         dm_ch, dm = {}, []
+    try:
+        ig_ch, ig = instagram()
+    except Exception as e:                       # noqa: BLE001
+        print(f"Instagram injoignable ({type(e).__name__}: {str(e)[:80]})")
+        ig_ch, ig = {}, []
     # L'API YouTube renvoie parfois une liste incomplete (le 09/10 a 6 h : 50
     # Shorts sur 59, le total a paru chuter de 9 700 vues). Un Short absent garde
     # ses derniers chiffres connus plutot que de disparaitre.
@@ -266,7 +308,7 @@ def relever(ancien: dict) -> dict:
                        **({"miniature": c["miniature"]} if c.get("miniature") else {})})
     sources = sources_par_clip()
     clips: dict[str, dict] = {}
-    for plateforme, liste in (("youtube", yt), ("dailymotion", dm)):
+    for plateforme, liste in (("youtube", yt), ("dailymotion", dm), ("instagram", ig)):
         for v in liste:
             cle = _nu(v["titre"])
             c = clips.setdefault(cle, {
@@ -281,18 +323,19 @@ def relever(ancien: dict) -> dict:
             if plateforme == "youtube":
                 c["id"], c["date"] = v["id"], v["date"]
     for cle, c in clips.items():
-        c["vues"] = sum(c.get(p, {}).get("vues", 0) for p in ("youtube", "dailymotion"))
-        c["likes"] = sum(c.get(p, {}).get("likes", 0) for p in ("youtube", "dailymotion"))
+        c["vues"] = sum(c.get(p, {}).get("vues", 0) for p in PLATEFORMES)
+        c["likes"] = sum(c.get(p, {}).get("likes", 0) for p in PLATEFORMES)
         if cle in sources:
             c["source"] = sources[cle]
         h = _local(c["date"]).hour
         c["creneau"] = "12 h" if 11 <= h < 15 else "19 h" if 17 <= h < 22 else "autre"
 
     maintenant = datetime.now()
-    totaux = {"youtube": sum(v["vues"] for v in yt), "dailymotion": sum(v["vues"] for v in dm)}
+    totaux = {"youtube": sum(v["vues"] for v in yt), "dailymotion": sum(v["vues"] for v in dm),
+              "instagram": sum(v["vues"] for v in ig)}
     stats = {"version": 2, "maj": maintenant.isoformat(timespec="minutes"),
              "chaine": {"nom": yt_ch["nom"], "avatar": yt_ch["avatar"], "id": yt_ch["id"],
-                        "youtube": {"abonnes": yt_ch["abonnes"]}, "dailymotion": dm_ch},
+                        "youtube": {"abonnes": yt_ch["abonnes"]}, "dailymotion": dm_ch, "instagram": ig_ch},
              "totaux": totaux}
 
     # --- instantanes horaires, et ce qu'on en deduit (aujourd'hui, 24 h)
