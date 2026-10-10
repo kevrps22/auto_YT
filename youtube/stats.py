@@ -183,6 +183,13 @@ def facebook() -> tuple[dict, list[dict]]:
         choix = ([p for p in pages if p["id"] == voulue]
                  or [p for p in pages if "singularit" in p["name"].lower()] or pages[:1])
         tok = choix[0]["access_token"]
+    else:
+        moi = requests.get(f"{g}/me", timeout=30, params={
+            "fields": "id,name", "access_token": tok}).json()
+        if "error" not in moi and "singularit" not in moi.get("name", "").lower():
+            raise RuntimeError(
+                f"le jeton de {moi.get('name')} ne donne acces a aucune Page : le regenerer "
+                "avec pages_show_list, pages_read_engagement et read_insights, en cochant la Page")
     page = requests.get(f"{g}/me", timeout=30, params={
         "fields": "id,name,followers_count,fan_count", "access_token": tok}).json()
     pid = page.get("id")
