@@ -183,7 +183,15 @@ def facebook() -> tuple[dict, list[dict]]:
         choix = ([p for p in pages if p["id"] == voulue]
                  or [p for p in pages if "singularit" in p["name"].lower()] or pages[:1])
         tok = choix[0]["access_token"]
-    else:
+    elif os.environ.get("FB_PAGE_ID"):
+        # Nouvelles Pages : « me/accounts » reste parfois vide alors que la Page
+        # est autorisee (le 10/10). On demande alors son jeton a la Page elle-meme,
+        # par son identifiant API (celui de la fenetre d'autorisation, pas de l'URL).
+        r = requests.get(f"{g}/{os.environ['FB_PAGE_ID']}", timeout=30, params={
+            "fields": "access_token,name", "access_token": tok}).json()
+        if r.get("access_token"):
+            tok = r["access_token"]
+    if not pages:
         moi = requests.get(f"{g}/me", timeout=30, params={
             "fields": "id,name", "access_token": tok}).json()
         if "error" not in moi and "singularit" not in moi.get("name", "").lower():
