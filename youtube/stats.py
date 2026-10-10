@@ -173,24 +173,18 @@ def facebook() -> tuple[dict, list[dict]]:
     # Un jeton de Page designe sa Page : « me », c'est elle. L'identifiant de
     # l'adresse facebook.com/profile.php?id=… n'est pas celui de l'API (le 10/10 :
     # « Object with ID … does not exist ») ; FB_PAGE_ID n'est qu'un secours.
-    page = requests.get(f"{g}/me", timeout=30, params={
-        "fields": "id,name,followers_count,fan_count", "access_token": tok}).json()
-    if "error" in page and os.environ.get("FB_PAGE_ID"):
-        page = requests.get(f"{g}/{os.environ['FB_PAGE_ID']}", timeout=30, params={
-            "fields": "id,name,followers_count,fan_count", "access_token": tok}).json()
-    if "followers_count" not in page and "fan_count" not in page and "error" not in page:
-        # Jeton utilisateur : on demande a Facebook le jeton de la Page qu'il gere
-        # (la seule, ou celle de FB_PAGE_ID / nommee « Singularite… »).
-        pages = requests.get(f"{g}/me/accounts", timeout=30, params={
-            "fields": "id,name,access_token", "access_token": tok}).json().get("data", [])
+    # Jeton utilisateur (le cas le plus courant, sorti de l'explorateur) : on
+    # demande a Facebook le jeton de la Page qu'il gere. Un jeton de Page, lui,
+    # n'a pas de « me/accounts » : on le garde tel quel.
+    pages = requests.get(f"{g}/me/accounts", timeout=30, params={
+        "fields": "id,name,access_token", "access_token": tok}).json().get("data", [])
+    if pages:
         voulue = os.environ.get("FB_PAGE_ID", "")
         choix = ([p for p in pages if p["id"] == voulue]
                  or [p for p in pages if "singularit" in p["name"].lower()] or pages[:1])
-        if not choix:
-            raise RuntimeError("ce jeton ne gere aucune Page (autorisation pages_show_list ?)")
         tok = choix[0]["access_token"]
-        page = requests.get(f"{g}/me", timeout=30, params={
-            "fields": "id,name,followers_count,fan_count", "access_token": tok}).json()
+    page = requests.get(f"{g}/me", timeout=30, params={
+        "fields": "id,name,followers_count,fan_count", "access_token": tok}).json()
     pid = page.get("id")
     if "error" in page:
         raise RuntimeError(page["error"].get("message"))
