@@ -114,6 +114,18 @@ def _attendre(tok: str, conteneur: str) -> None:
     raise RuntimeError("Instagram : traitement de la video trop long (10 min)")
 
 
+def lien_public(vid: str, nom: str) -> str:
+    """Adresse directe du clip dans la release GitHub (clipper-<id>)."""
+    import github_io as G
+    url = f"https://github.com/{G.DEPOT}/releases/download/clipper-{vid}/{nom}"
+    r = requests.head(url, timeout=30, allow_redirects=False)
+    if r.status_code in (301, 302) and r.headers.get("Location"):
+        return r.headers["Location"]
+    if r.status_code == 200:
+        return url
+    raise RuntimeError(f"clip absent de la release GitHub ({r.status_code}) : {nom}")
+
+
 def publier(vid: str, n: int, simuler: bool = False) -> str:
     idx = P.index(vid)
     clip = idx["clips"][n - 1]
@@ -134,16 +146,13 @@ def publier(vid: str, n: int, simuler: bool = False) -> str:
 
     tok = jeton()
     ig = compte(tok)["user_id"]
-    # envoi direct du fichier (« resumable ») : pas besoin d'heberger la video
+    # Avec la connexion Instagram, l'API exige un lien public (le 10/10, l'envoi
+    # direct du fichier a ete refuse : « video_url is required »). Le clip est
+    # deja dans la release GitHub publique ; on donne l'adresse finale du
+    # fichier, apres la redirection de GitHub (valable une heure).
     c = _appel("POST", f"/{ig}/media", data={
-        "media_type": "REELS", "upload_type": "resumable", "caption": texte,
+        "media_type": "REELS", "video_url": lien_public(vid, video.name), "caption": texte,
         "share_to_feed": "true", "access_token": tok})
-    with open(video, "rb") as f:
-        r = requests.post(c["uri"], data=f, timeout=600, headers={
-            "Authorization": f"OAuth {tok}", "offset": "0",
-            "file_size": str(video.stat().st_size)})
-    if r.status_code >= 400:
-        raise RuntimeError(f"Instagram : envoi du fichier refuse ({r.status_code}) {r.text[:160]}")
     _attendre(tok, c["id"])
     pub = _appel("POST", f"/{ig}/media_publish",
                  data={"creation_id": c["id"], "access_token": tok})
