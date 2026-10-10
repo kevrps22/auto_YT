@@ -179,8 +179,18 @@ def facebook() -> tuple[dict, list[dict]]:
         page = requests.get(f"{g}/{os.environ['FB_PAGE_ID']}", timeout=30, params={
             "fields": "id,name,followers_count,fan_count", "access_token": tok}).json()
     if "followers_count" not in page and "fan_count" not in page and "error" not in page:
-        raise RuntimeError("ce jeton est un jeton utilisateur, pas un jeton de Page "
-                           "(il faut celui de la ligne « Singularité Shorts » dans me/accounts)")
+        # Jeton utilisateur : on demande a Facebook le jeton de la Page qu'il gere
+        # (la seule, ou celle de FB_PAGE_ID / nommee « Singularite… »).
+        pages = requests.get(f"{g}/me/accounts", timeout=30, params={
+            "fields": "id,name,access_token", "access_token": tok}).json().get("data", [])
+        voulue = os.environ.get("FB_PAGE_ID", "")
+        choix = ([p for p in pages if p["id"] == voulue]
+                 or [p for p in pages if "singularit" in p["name"].lower()] or pages[:1])
+        if not choix:
+            raise RuntimeError("ce jeton ne gere aucune Page (autorisation pages_show_list ?)")
+        tok = choix[0]["access_token"]
+        page = requests.get(f"{g}/me", timeout=30, params={
+            "fields": "id,name,followers_count,fan_count", "access_token": tok}).json()
     pid = page.get("id")
     if "error" in page:
         raise RuntimeError(page["error"].get("message"))
