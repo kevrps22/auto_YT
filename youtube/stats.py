@@ -42,7 +42,7 @@ DM = "https://api.dailymotion.com"
 BRANCHE, FICHIER = "stats", "stats.json"
 HEURES_GARDEES, JOURS_PAR_CLIP = 48, 60
 CRENEAUX = (12, 19)
-PLATEFORMES = ("youtube", "dailymotion", "instagram")
+PLATEFORMES = ("youtube", "dailymotion", "instagram", "facebook")
 
 
 def _nu(t: str) -> str:
@@ -159,6 +159,48 @@ def instagram() -> tuple[dict, list[dict]]:
             break
     return {"abonnes": int(moi.get("followers_count") or 0),
             "compte": moi.get("username", "")}, videos
+
+
+def facebook() -> tuple[dict, list[dict]]:
+    """Abonnes et Reels de la Page Facebook (partages depuis Instagram).
+
+    Il faut dans le .env : FB_PAGE_ID et FB_PAGE_TOKEN (jeton de Page, sans
+    expiration s'il vient d'un jeton utilisateur longue duree)."""
+    pid, tok = os.environ.get("FB_PAGE_ID"), os.environ.get("FB_PAGE_TOKEN")
+    if not (pid and tok):
+        return {}, []
+    g = "https://graph.facebook.com/v23.0"
+    page = requests.get(f"{g}/{pid}", timeout=30, params={
+        "fields": "name,followers_count,fan_count", "access_token": tok}).json()
+    if "error" in page:
+        raise RuntimeError(page["error"].get("message"))
+    videos, url = [], f"{g}/{pid}/video_reels"
+    params = {"fields": "id,description,permalink_url,created_time,"
+                        "likes.summary(true).limit(0),comments.summary(true).limit(0)",
+              "limit": 50, "access_token": tok}
+    for _ in range(4):
+        r = requests.get(url, timeout=30, params=params).json()
+        if "error" in r:
+            raise RuntimeError(r["error"].get("message"))
+        for v in r.get("data", []):
+            vues = 0
+            ins = requests.get(f"{g}/{v['id']}/video_insights", timeout=30, params={
+                "metric": "blue_reels_play_count", "access_token": tok}).json()
+            for x in ins.get("data", []):
+                vues = (x.get("values") or [{}])[0].get("value", 0) or 0
+            lien = v.get("permalink_url", "")
+            videos.append({"id": v["id"], "titre": (v.get("description") or "").split("\n")[0],
+                           "url": lien if lien.startswith("http") else f"https://www.facebook.com{lien}",
+                           "date": _local(v["created_time"].replace("+0000", "+00:00")).isoformat(),
+                           "vues": int(vues),
+                           "likes": int(v.get("likes", {}).get("summary", {}).get("total_count", 0)),
+                           "commentaires": int(v.get("comments", {}).get("summary", {})
+                                               .get("total_count", 0))})
+        url, params = r.get("paging", {}).get("next"), {}
+        if not url:
+            break
+    return {"abonnes": int(page.get("followers_count") or page.get("fan_count") or 0),
+            "nom": page.get("name", "")}, videos
 
 
 def commentaires(chaine_id: str, titres: dict[str, str]) -> list[dict]:
@@ -298,6 +340,11 @@ def relever(ancien: dict) -> dict:
     except Exception as e:                       # noqa: BLE001
         print(f"Instagram injoignable ({type(e).__name__}: {str(e)[:80]})")
         ig_ch, ig = {}, []
+    try:
+        fb_ch, fb = facebook()
+    except Exception as e:                       # noqa: BLE001
+        print(f"Facebook injoignable ({type(e).__name__}: {str(e)[:80]})")
+        fb_ch, fb = {}, []
     # L'API YouTube renvoie parfois une liste incomplete (le 09/10 a 6 h : 50
     # Shorts sur 59, le total a paru chuter de 9 700 vues). Un Short absent garde
     # ses derniers chiffres connus plutot que de disparaitre.
@@ -308,7 +355,7 @@ def relever(ancien: dict) -> dict:
                        **({"miniature": c["miniature"]} if c.get("miniature") else {})})
     sources = sources_par_clip()
     clips: dict[str, dict] = {}
-    for plateforme, liste in (("youtube", yt), ("dailymotion", dm), ("instagram", ig)):
+    for plateforme, liste in (("youtube", yt), ("dailymotion", dm), ("instagram", ig), ("facebook", fb)):
         for v in liste:
             cle = _nu(v["titre"])
             c = clips.setdefault(cle, {
@@ -332,10 +379,10 @@ def relever(ancien: dict) -> dict:
 
     maintenant = datetime.now()
     totaux = {"youtube": sum(v["vues"] for v in yt), "dailymotion": sum(v["vues"] for v in dm),
-              "instagram": sum(v["vues"] for v in ig)}
+              "instagram": sum(v["vues"] for v in ig), "facebook": sum(v["vues"] for v in fb)}
     stats = {"version": 2, "maj": maintenant.isoformat(timespec="minutes"),
              "chaine": {"nom": yt_ch["nom"], "avatar": yt_ch["avatar"], "id": yt_ch["id"],
-                        "youtube": {"abonnes": yt_ch["abonnes"]}, "dailymotion": dm_ch, "instagram": ig_ch},
+                        "youtube": {"abonnes": yt_ch["abonnes"]}, "dailymotion": dm_ch, "instagram": ig_ch, "facebook": fb_ch},
              "totaux": totaux}
 
     # --- instantanes horaires, et ce qu'on en deduit (aujourd'hui, 24 h)
