@@ -166,12 +166,22 @@ def facebook() -> tuple[dict, list[dict]]:
 
     Il faut dans le .env : FB_PAGE_ID et FB_PAGE_TOKEN (jeton de Page, sans
     expiration s'il vient d'un jeton utilisateur longue duree)."""
-    pid, tok = os.environ.get("FB_PAGE_ID"), os.environ.get("FB_PAGE_TOKEN")
-    if not (pid and tok):
+    tok = os.environ.get("FB_PAGE_TOKEN")
+    if not tok:
         return {}, []
     g = "https://graph.facebook.com/v23.0"
-    page = requests.get(f"{g}/{pid}", timeout=30, params={
-        "fields": "name,followers_count,fan_count", "access_token": tok}).json()
+    # Un jeton de Page designe sa Page : « me », c'est elle. L'identifiant de
+    # l'adresse facebook.com/profile.php?id=… n'est pas celui de l'API (le 10/10 :
+    # « Object with ID … does not exist ») ; FB_PAGE_ID n'est qu'un secours.
+    page = requests.get(f"{g}/me", timeout=30, params={
+        "fields": "id,name,followers_count,fan_count", "access_token": tok}).json()
+    if "error" in page and os.environ.get("FB_PAGE_ID"):
+        page = requests.get(f"{g}/{os.environ['FB_PAGE_ID']}", timeout=30, params={
+            "fields": "id,name,followers_count,fan_count", "access_token": tok}).json()
+    if "followers_count" not in page and "fan_count" not in page and "error" not in page:
+        raise RuntimeError("ce jeton est un jeton utilisateur, pas un jeton de Page "
+                           "(il faut celui de la ligne « Singularité Shorts » dans me/accounts)")
+    pid = page.get("id")
     if "error" in page:
         raise RuntimeError(page["error"].get("message"))
     videos, url = [], f"{g}/{pid}/video_reels"
