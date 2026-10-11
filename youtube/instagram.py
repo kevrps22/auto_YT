@@ -151,7 +151,8 @@ def publier(vid: str, n: int, simuler: bool = False) -> str:
     # deja dans la release GitHub publique ; on donne l'adresse finale du
     # fichier, apres la redirection de GitHub (valable une heure).
     c = _appel("POST", f"/{ig}/media", data={
-        "media_type": "REELS", "video_url": lien_public(vid, video.name), "caption": texte,
+        "media_type": "REELS", "video_url": lien_public(vid, clip.get("fichier_insta") or video.name),
+        "caption": texte,
         "share_to_feed": "true", "access_token": tok})
     _attendre(tok, c["id"])
     pub = _appel("POST", f"/{ig}/media_publish",

@@ -1,23 +1,29 @@
 # Sources a traiter, dans l'ordre (identifiant YouTube ou lien, une par ligne).
 # Tout ce qui suit un # est ignore. Vide : le Pi prend l'entretien CC le plus vu.
-# Criteres : invite clivant ou connu, colere / accusation / revelation, sujet du quotidien.
-V34Y_fONxjI  # Juan Branco - Legitime colere
-GSpAeufEV_c  # Anticor - les 120 milliards de la corruption
-Hix-9dz2gL4  # Christophe Brusset - la malbouffe
-wMCaq5I4PJ0  # Juan Branco - Empoisonnement
+#
+# Ordre revu le 11/10 d'apres les chiffres : les invites qui RACONTENT ou font RIRE
+# (Klein, Eboue, Ferrari) font les vues ; les profils militants ou experts poses
+# (Giraud, Conesa, Branco cote YouTube) font commenter mais plafonnent a 1-3 k.
+# Les memes invites font 200-800 k sur @thinkerview_nofficiel (Omiri 791 k,
+# Laporte 635 k, ex-DGSI 633 k) : ils passent devant.
+V34Y_fONxjI  # Juan Branco - Legitime colere (fait)
+GSpAeufEV_c  # Anticor - les 120 milliards de la corruption (fait)
+DSxc3eVBwYk  # Akim Omiri - humour en temps de guerre (791 k sur Insta)
+mDfQkS_1SfU  # Joan-Ramon Laporte - societe intoxiquee (635 k : « Les medicaments tuent ? »)
 KtLvAGtz2BM  # Albert Dupontel
-_x8lmFjSB0A  # Renaud Van Ruymbeke - paradis fiscaux
-lJrD2zvF-cM  # Francois Ruffin
-FR84xMp0cWY  # Laurent Richard - espionnage, mafia
 JZJqRqvkue8  # Haroun
-EzL1_Kod9-w  # Jean-Pierre Petit - OVNI
-0QSlS8ifBbo  # Bruno Le Maire
+Hix-9dz2gL4  # Christophe Brusset - la malbouffe
 C7u6NebjkcY  # Alain Juillet - ex-DGSE
-DQC3ffpEeoE  # Eric Coquerel - France au bord de la faillite
 n0CQPKMyauw  # Marc Eichinger - espion
+FR84xMp0cWY  # Laurent Richard - espionnage, mafia
+EzL1_Kod9-w  # Jean-Pierre Petit - OVNI
+wMCaq5I4PJ0  # Juan Branco - Empoisonnement
+_x8lmFjSB0A  # Renaud Van Ruymbeke - paradis fiscaux
 BwisLTtzSik  # Juan Branco - echec de l'elite
+# profils militants / experts : en fin de liste
+lJrD2zvF-cM  # Francois Ruffin
+0QSlS8ifBbo  # Bruno Le Maire
+DQC3ffpEeoE  # Eric Coquerel - France au bord de la faillite
 gJLIMGRTACQ  # Jean-Philippe Tanguy
-mDfQkS_1SfU  # Joan-Ramon Laporte - societe intoxiquee
 AyMUu3wrcU8  # Marc Touati - catastrophe financiere
 Q63JItjAsow  # Jean-Luc Melenchon
-DSxc3eVBwYk  # Akim Omiri - humour en temps de guerre

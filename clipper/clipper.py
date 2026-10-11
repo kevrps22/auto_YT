@@ -61,6 +61,14 @@ SRC_CROP_W = 0.5625
 FG_Y = 380                           # haut du premier plan (carre 1080x1080)
 HOOK_Y = 170                         # encadre d'accroche
 HOOK_DUR = 3.2                       # l'accroche disparait apres l'ouverture, comme chez Opus
+# Etiquette de la version Instagram/Facebook : courte, affichee TOUT le clip, sous
+# le visage. C'est la recette de @thinkerview_nofficiel (166 k abonnes, 20 k a
+# 790 k vues par Reel sur les memes interviews) : le spectateur sait en une seconde
+# de quoi on parle. YouTube garde le clip habituel.
+ETI_Y = 1290
+# Volume cible des plateformes (-14 LUFS). Les interviews Thinkerview sortent vers
+# -21 : un clip plus faible que le precedent dans le fil se fait passer.
+LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"
 CAP_Y = 1540                         # ligne de base des sous-titres (hors zone de l'interface Shorts)
 WORDS_PER_CAP = 3
 # Whisper date le debut d'un mot a l'attaque du son ; l'oeil, lui, a besoin d'une
@@ -166,12 +174,21 @@ def choisir(phr: list[dict], cuts: list[float], n: int, titre_src: str) -> list[
         "Criteres :\n"
         "1. Un extrait = UN sujet complet : de preference, il commence quand l'image "
         "commentee apparait et va jusqu'a la chute de la discussion sur cette image.\n"
-        "2. La PREMIERE PHRASE accroche seule : reaction forte, blague, question. "
-        "Jamais une transition ni une phrase d'installation.\n"
-        "3. L'extrait se comprend SANS le reste de la video.\n"
-        "4. Il se termine sur une CHUTE (punchline, rire, conclusion).\n"
-        f"5. Duree entre {MIN_S:.0f} et {MAX_S:.0f} secondes. Pas de chevauchement.\n"
-        "6. EXCLUS : sponsors, codes promo, publicites, remerciements pour des dons, "
+        "2. La PREMIERE PHRASE accroche seule : reaction forte, blague, question, "
+        "affirmation choc. Jamais une transition ni une phrase d'installation.\n"
+        "3. L'extrait se comprend SANS le reste de la video. Les spectateurs se "
+        "plaignent en commentaire : « il parle de quoi ? », « de quelle blague parle-"
+        "t-il ? ». Donc INTERDIT de commencer par une reference a ce qui a ete dit "
+        "avant (« cette blague », « ce que je disais », « lui », « ca », « et donc »). "
+        "Si le sujet est introduit par une question de l'intervieweur, commence a la "
+        "question.\n"
+        "4. Il se termine sur une CHUTE (punchline, rire, conclusion) et contient la "
+        "reponse ou l'information promise : on a eu « il manque l'info interessante » "
+        "sur un extrait coupe avant la revelation. Mieux vaut un extrait plus long "
+        "que coupe trop tot.\n"
+        "5. Un extrait qui ne remplit pas 3 et 4 est ELIMINE, meme s'il est fort.\n"
+        f"6. Duree entre {MIN_S:.0f} et {MAX_S:.0f} secondes. Pas de chevauchement.\n"
+        "7. EXCLUS : sponsors, codes promo, publicites, remerciements pour des dons, "
         "intro, outro, appels a s'abonner, logistique de la chaine.\n\n"
         "Utilise les horodatages exacts de la transcription.\n"
         "Titres et accroches sont affiches a l'ecran : ecris-les dans un francais "
@@ -181,6 +198,9 @@ def choisir(phr: list[dict], cuts: list[float], n: int, titre_src: str) -> list[
         '"titre": "titre YouTube accrocheur, en francais", '
         '"accroche_ecran": "phrase courte affichee a l ouverture : 9 mots maximum, casse '
         'normale, sans emoji, cree la curiosite sans devoiler la chute", '
+        '"etiquette": "3 a 6 mots, affiches tout le clip : une question qui donne le '
+        'sujet (« Les medicaments tuent ? », « La verite sur Palantir ? ») ou une citation '
+        'choc de l invite entre guillemets (« Un chomeur coute plus cher qu un mort »)", '
         '"score": 0-100}]\n\n'
         "TRANSCRIPTION :\n" + "\n".join(lignes)
     )
@@ -345,7 +365,8 @@ def mots_dans(words: list[dict], s: float, e: float) -> list[dict]:
     return [w for w in words if w["s"] >= s - 0.05 and w["e"] <= e + 0.05 and _propre(w["w"])]
 
 
-def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str = "") -> None:
+def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str = "",
+                etiquette: str = "") -> None:
     """Sous-titres par groupes de 3 mots, mot prononce en orange, apparition animee.
     Encadre d'accroche blanc pendant l'ouverture seulement."""
     ws = mots_dans(words, s, e)
@@ -360,7 +381,10 @@ def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str 
         "0,0,1,7,5,2,80,80,0,1\n"
         # BorderStyle 3 : fond opaque (couleur de contour) derriere le texte
         f"Style: Hook,{HOOK_FONT},66,&H00141414,&H00141414,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,"
-        "0,0,3,22,0,8,170,170,0,1\n\n"
+        "0,0,3,22,0,8,170,170,0,1\n"
+        # etiquette Instagram : meme encadre blanc, centre (alignement 5), plus petit
+        f"Style: Tag,Anton,70,&H00141414,&H00141414,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,"
+        "0,0,3,18,0,5,140,140,0,1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     groupes = grouper(ws)
@@ -389,6 +413,10 @@ def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str 
         accroche = re.sub(r"[^\w\s'’?!,.:;-]", "", accroche).strip()
         lignes.insert(0, f"Dialogue: 1,{_ass_time(0)},{_ass_time(HOOK_DUR)},Hook,,0,0,0,,"
                       + "{\\pos(540," + str(HOOK_Y) + ")\\fad(120,220)}" + accroche)
+    if etiquette:
+        etiquette = re.sub(r"[^\w\s'’?!,.:;«»\"-]", "", etiquette).strip()
+        lignes.insert(0, f"Dialogue: 1,{_ass_time(0)},{_ass_time(e - s + 1)},Tag,,0,0,0,,"
+                      + "{\\pos(540," + str(ETI_Y) + ")\\fad(150,0)}" + etiquette)
     dst.write_text(head + "\n".join(lignes) + "\n", encoding="utf-8")
 
 
@@ -403,14 +431,18 @@ def rendre(src: Path, s: float, e: float, ass: Path, dst: Path) -> None:
         # premier plan : le carre central de la source, en pleine largeur
         f"[0:v]crop=iw*{SRC_CROP_W}:ih,scale={W}:{fg_h}:flags=lanczos[fg];"
         # pas de fps=30 : on garde les 60 i/s de la source, comme Opus
-        f"[bg][fg]overlay=(W-w)/2:{FG_Y},subtitles='{ass_ff}':fontsdir='{fonts_ff}'[v]"
+        f"[bg][fg]overlay=(W-w)/2:{FG_Y},subtitles='{ass_ff}':fontsdir='{fonts_ff}'[v];"
+        # le son au volume des plateformes (dans le graphe : -af refuse de se combiner
+        # avec -filter_complex)
+        f"[0:a]{LOUDNORM}[a]"
     )
     cmd = ["ffmpeg", "-y", "-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", str(src),
-           "-filter_complex", fc, "-map", "[v]", "-map", "0:a",
+           "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
            # preset reglable : les machines a 2 coeurs de GitHub passent en "fast"
            "-c:v", "libx264", "-crf", "17",
            "-preset", os.environ.get("CLIPPER_X264_PRESET", "medium"), "-pix_fmt", "yuv420p",
-           "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dst)]
+           "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+           "-movflags", "+faststart", str(dst)]
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode:
         raise RuntimeError(r.stderr[-1500:])
@@ -491,8 +523,18 @@ def produire(src: Path, choix: list[dict], n: int, suivi=None) -> list[dict]:
         print(f"[{i}] {s:.1f}-{e:.1f}s ({e - s:.0f}s) score {c.get('score')} : {c.get('titre')}")
         rendre(src, s, e, ass, base.with_suffix(".mp4"))
         ass.unlink(missing_ok=True)
+        # Version Instagram/Facebook : l'etiquette tout le clip, sans l'encadre du haut.
+        # Rendue ici, sur GitHub : le Pi la donne a Instagram par son lien public,
+        # sans jamais la telecharger.
+        insta = ""
+        if c.get("etiquette"):
+            insta = base.name + "_insta.mp4"
+            sous_titres(words, s, e, ass, "", c["etiquette"])
+            rendre(src, s, e, ass, out / insta)
+            ass.unlink(missing_ok=True)
         rendus.append({"fichier": base.with_suffix(".mp4").name, "titre": c.get("titre", ""),
                        "accroche": c.get("accroche_ecran", ""), "score": c.get("score"),
+                       "etiquette": c.get("etiquette", ""), "fichier_insta": insta,
                        "debut": round(s, 2), "fin": round(e, 2), "duree": round(e - s, 1),
                        "description": description(c, info), "publiable": publiable(info)})
     index ={**info, "genere": __import__("time").strftime("%Y-%m-%d %H:%M"), "clips": rendus}

@@ -231,7 +231,9 @@ def recuperer(vid: str, dest: Path | None = None) -> dict:
     travail = {f"{vid}.words.json", f"{vid}.scenes.txt", f"{vid}.clips.json"}
     voulus = [a for a in rel.json()["assets"]
               if a["name"] == f"{vid}.json" or a["name"] in travail
-              or (a["name"].startswith(f"{vid}_") and a["name"].endswith(".mp4"))]
+              or (a["name"].startswith(f"{vid}_") and a["name"].endswith(".mp4")
+                  # la version Instagram reste sur GitHub : Instagram la lit par son lien
+                  and not a["name"].endswith("_insta.mp4"))]
     for a in voulus:
         cible = (C.SRC if a["name"] in travail else dest) / a["name"]
         cible.parent.mkdir(parents=True, exist_ok=True)
