@@ -399,6 +399,13 @@ def publier(simuler: bool = False) -> None:
             trace("instagram : " + ("simule" if simuler else "publie"))
         except Exception as e:                      # noqa: BLE001
             trace(f"INSTAGRAM IMPOSSIBLE ({type(e).__name__}: {str(e)[:120]})")
+    import facebook as F
+    if F.actif() and (url or simuler):
+        try:
+            F.publier(vid, n, simuler=simuler)
+            trace("facebook : " + ("simule" if simuler else "publie"))
+        except Exception as e:                      # noqa: BLE001
+            trace(f"FACEBOOK IMPOSSIBLE ({type(e).__name__}: {str(e)[:120]})")
     menage(simuler)          # le clip publie et sa version habillee ne servent plus
 
 
