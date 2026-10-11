@@ -513,6 +513,11 @@ def invite(titre_source: str) -> str:
     se suivent. Il est place n'importe ou selon les videos — au debut chez Etienne
     Klein, a la fin chez Aurelien Barrau — et « EN DIRECT » ne doit pas passer pour
     un nom, d'ou le rejet des mots tout en majuscules."""
+    # Format habituel de Thinkerview : « Question ? Invite [EN DIRECT] ». Le 11/10,
+    # « France Corruption : Qui se partage… ? Anticor » donnait « France Corruption ».
+    m = re.search(r"\?\s*([^?\[\]]{3,60}?)\s*\[", titre_source)
+    if m and not m.group(1).isupper():
+        return m.group(1).strip(" :-")
     mots = re.findall(r"[^\W\d_]+", titre_source, flags=re.UNICODE)
     for a, b in zip(mots, mots[1:]):
         if all(m[:1].isupper() and not m.isupper() and len(m) > 1 for m in (a, b)):
