@@ -66,6 +66,7 @@ HOOK_DUR = 3.2                       # l'accroche disparait apres l'ouverture, c
 # 790 k vues par Reel sur les memes interviews) : le spectateur sait en une seconde
 # de quoi on parle. YouTube garde le clip habituel.
 ETI_Y = 1290
+ETI_DUR = 5.0                        # puis elle s'efface : le visage reste degage ensuite
 # Volume cible des plateformes (-14 LUFS). Les interviews Thinkerview sortent vers
 # -21 : un clip plus faible que le precedent dans le fil se fait passer.
 LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"
@@ -472,14 +473,17 @@ def rendre(src: Path, s: float, e: float, ass: Path, dst: Path,
         f"[0:v]crop=iw*{SRC_CROP_W}:ih,scale={W}:{fg_h}:flags=lanczos[fg];"
         # pas de fps=30 : on garde les 60 i/s de la source, comme Opus
         f"[bg][fg]overlay=(W-w)/2:{FG_Y},subtitles='{ass_ff}':fontsdir='{fonts_ff}'"
-        + (f"[sub];[1:v]format=rgba,fade=in:st=0:d=0.3:alpha=1[eti];"
-           f"[sub][eti]overlay=0:{ETI_Y - haut_eti // 2}[v];" if etiquette else "[v];") +
+        + (f"[sub];[1:v]format=rgba,fade=in:st=0:d=0.3:alpha=1,"
+           f"fade=out:st={ETI_DUR - 0.4}:d=0.4:alpha=1[eti];"
+           # eof_action=pass : l'image finie, la video continue sans elle
+           f"[sub][eti]overlay=0:{ETI_Y - haut_eti // 2}:eof_action=pass[v];"
+           if etiquette else "[v];") +
         # le son au volume des plateformes (dans le graphe : -af refuse de se combiner
         # avec -filter_complex)
         f"[0:a]{LOUDNORM}[a]"
     )
     cmd = ["ffmpeg", "-y", "-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", str(src),
-           *(["-loop", "1", "-t", f"{e - s:.2f}", "-i", str(etiquette)] if etiquette else []),
+           *(["-loop", "1", "-t", f"{ETI_DUR}", "-i", str(etiquette)] if etiquette else []),
            "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
            # preset reglable : les machines a 2 coeurs de GitHub passent en "fast"
            "-c:v", "libx264", "-crf", "17",
