@@ -5,3 +5,5 @@ faster-whisper>=1.0.0
 av>=12.0.0,<19
 google-genai>=1.0.0
 requests>=2.31.0
+# etiquette des versions Instagram (coins arrondis, ombre)
+Pillow>=10.0

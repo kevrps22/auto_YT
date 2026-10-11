@@ -420,8 +420,48 @@ def sous_titres(words: list[dict], s: float, e: float, dst: Path, accroche: str 
     dst.write_text(head + "\n".join(lignes) + "\n", encoding="utf-8")
 
 
+def etiquette_png(texte: str, dst: Path) -> int:
+    """Dessine l'etiquette des versions Instagram : encadre blanc aux coins arrondis,
+    ombre douce, texte noir tres gras, sur deux lignes au besoin. Le moteur de
+    sous-titres ne sait faire ni coins arrondis ni ombre floue : on passe par une
+    image incrustee. Renvoie la hauteur de l'image (pour la centrer sur ETI_Y)."""
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    texte = re.sub(r"\s+", " ", texte).strip()
+    police = ImageFont.truetype(str(FONTS_DIR / "Montserrat-Black.ttf"), 60)
+    mesure = ImageDraw.Draw(Image.new("L", (1, 1)))
+    larg = lambda t: mesure.textlength(t, font=police)
+    # une ligne si elle tient, sinon coupure au mot le plus proche du milieu
+    lignes = [texte]
+    if larg(texte) > 940:
+        mots = texte.split()
+        coupe = min(range(1, len(mots)), key=lambda i: abs(larg(" ".join(mots[:i]))
+                                                          - larg(" ".join(mots[i:]))))
+        lignes = [" ".join(mots[:coupe]), " ".join(mots[coupe:])]
+    asc, desc = police.getmetrics()
+    interligne = asc + desc - 6
+    pad_x, pad_y, rayon = 38, 22, 28
+    bw = int(max(larg(l) for l in lignes)) + 2 * pad_x
+    bh = interligne * len(lignes) + 2 * pad_y
+    marge = 40                                  # place pour l'ombre
+    img = Image.new("RGBA", (W, bh + 2 * marge), (0, 0, 0, 0))
+    x0 = (W - bw) // 2
+    # ombre : le meme encadre en noir, decale vers le bas et floute
+    ombre = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(ombre).rounded_rectangle(
+        (x0, marge + 10, x0 + bw, marge + 10 + bh), rayon, fill=(0, 0, 0, 150))
+    img.alpha_composite(ombre.filter(ImageFilter.GaussianBlur(14)))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((x0, marge, x0 + bw, marge + bh), rayon, fill=(255, 255, 255, 255))
+    for k, l in enumerate(lignes):
+        d.text((W / 2, marge + pad_y + k * interligne + interligne / 2), l,
+               font=police, fill=(17, 17, 17, 255), anchor="mm")
+    img.save(dst)
+    return img.height
+
+
 # ------------------------------------------------------------------ rendu
-def rendre(src: Path, s: float, e: float, ass: Path, dst: Path) -> None:
+def rendre(src: Path, s: float, e: float, ass: Path, dst: Path,
+           etiquette: Path | None = None, haut_eti: int = 0) -> None:
     fg_h = int(round(W / (16 / 9 * SRC_CROP_W) / 2) * 2)
     ass_ff = str(ass).replace("\\", "/").replace(":", r"\:")
     fonts_ff = str(FONTS_DIR).replace("\\", "/").replace(":", r"\:")
@@ -431,12 +471,15 @@ def rendre(src: Path, s: float, e: float, ass: Path, dst: Path) -> None:
         # premier plan : le carre central de la source, en pleine largeur
         f"[0:v]crop=iw*{SRC_CROP_W}:ih,scale={W}:{fg_h}:flags=lanczos[fg];"
         # pas de fps=30 : on garde les 60 i/s de la source, comme Opus
-        f"[bg][fg]overlay=(W-w)/2:{FG_Y},subtitles='{ass_ff}':fontsdir='{fonts_ff}'[v];"
+        f"[bg][fg]overlay=(W-w)/2:{FG_Y},subtitles='{ass_ff}':fontsdir='{fonts_ff}'"
+        + (f"[sub];[1:v]format=rgba,fade=in:st=0:d=0.3:alpha=1[eti];"
+           f"[sub][eti]overlay=0:{ETI_Y - haut_eti // 2}[v];" if etiquette else "[v];") +
         # le son au volume des plateformes (dans le graphe : -af refuse de se combiner
         # avec -filter_complex)
         f"[0:a]{LOUDNORM}[a]"
     )
     cmd = ["ffmpeg", "-y", "-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", str(src),
+           *(["-loop", "1", "-t", f"{e - s:.2f}", "-i", str(etiquette)] if etiquette else []),
            "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
            # preset reglable : les machines a 2 coeurs de GitHub passent en "fast"
            "-c:v", "libx264", "-crf", "17",
@@ -529,9 +572,12 @@ def produire(src: Path, choix: list[dict], n: int, suivi=None) -> list[dict]:
         insta = ""
         if c.get("etiquette"):
             insta = base.name + "_insta.mp4"
-            sous_titres(words, s, e, ass, "", c["etiquette"])
-            rendre(src, s, e, ass, out / insta)
+            png = base.with_suffix(".etiquette.png")
+            haut = etiquette_png(c["etiquette"], png)
+            sous_titres(words, s, e, ass)
+            rendre(src, s, e, ass, out / insta, png, haut)
             ass.unlink(missing_ok=True)
+            png.unlink(missing_ok=True)
         rendus.append({"fichier": base.with_suffix(".mp4").name, "titre": c.get("titre", ""),
                        "accroche": c.get("accroche_ecran", ""), "score": c.get("score"),
                        "etiquette": c.get("etiquette", ""), "fichier_insta": insta,
