@@ -473,8 +473,9 @@ def rendre(src: Path, s: float, e: float, ass: Path, dst: Path,
         f"[0:v]crop=iw*{SRC_CROP_W}:ih,scale={W}:{fg_h}:flags=lanczos[fg];"
         # pas de fps=30 : on garde les 60 i/s de la source, comme Opus
         f"[bg][fg]overlay=(W-w)/2:{FG_Y},subtitles='{ass_ff}':fontsdir='{fonts_ff}'"
-        + (f"[sub];[1:v]format=rgba,fade=in:st=0:d=0.3:alpha=1,"
-           f"fade=out:st={ETI_DUR - 0.4}:d=0.4:alpha=1[eti];"
+        # pas de fondu d'entree : l'etiquette est la des la premiere image, c'est
+        # elle qui retient le pouce ; seule la sortie est adoucie
+        + (f"[sub];[1:v]format=rgba,fade=out:st={ETI_DUR - 0.4}:d=0.4:alpha=1[eti];"
            # eof_action=pass : l'image finie, la video continue sans elle
            f"[sub][eti]overlay=0:{ETI_Y - haut_eti // 2}:eof_action=pass[v];"
            if etiquette else "[v];") +
