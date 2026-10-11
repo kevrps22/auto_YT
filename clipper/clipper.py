@@ -518,11 +518,20 @@ def invite(titre_source: str) -> str:
     m = re.search(r"\?\s*([^?\[\]]{3,60}?)\s*\[", titre_source)
     if m and not m.group(1).isupper():
         return m.group(1).strip(" :-")
-    mots = re.findall(r"[^\W\d_]+", titre_source, flags=re.UNICODE)
-    for a, b in zip(mots, mots[1:]):
-        if all(m[:1].isupper() and not m.isupper() and len(m) > 1 for m in (a, b)):
-            return f"{a} {b}"
-    return ""
+    # deux mots capitalises VRAIMENT voisins (un seul espace entre eux), noms a trait
+    # d'union compris : « Astrophysique : Jean-Pierre Petit » donnait « Astrophysique Jean »
+    mot = r"[^\W\d_][^\W\d_'’-]*(?:-[^\W\d_]+)*"
+    for m in re.finditer(rf"(?<![\w-])({mot}) ({mot})(?![\w-])", titre_source):
+        if all(x[:1].isupper() and not x.isupper() and len(x) > 1 for x in m.groups()):
+            nom = f"{m.group(1)} {m.group(2)}"
+            # particule de nom de famille : « Bruno Le Maire », pas « Bruno Le »
+            suite = re.match(rf" ({mot})", titre_source[m.end():])
+            if m.group(2) in {"Le", "La", "De", "Du", "Des", "Van", "Von", "Da", "Di"} and suite:
+                nom += " " + suite.group(1)
+            return nom
+    # nom d'un seul mot en tete de titre : « Haroun : l'humour comme miroir… »
+    m = re.match(r"\s*([^\W\d_][\w'’-]{2,})\s*:", titre_source)
+    return m.group(1) if m and not m.group(1).isupper() else ""
 
 
 def description(clip: dict, info: dict) -> str:
