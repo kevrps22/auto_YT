@@ -65,7 +65,7 @@ HOOK_DUR = 3.2                       # l'accroche disparait apres l'ouverture, c
 # le visage. C'est la recette de @thinkerview_nofficiel (166 k abonnes, 20 k a
 # 790 k vues par Reel sur les memes interviews) : le spectateur sait en une seconde
 # de quoi on parle. YouTube garde le clip habituel.
-ETI_Y = 1290
+ETI_Y = 960                          # centre de l'ecran : c'est la que l'oeil tombe
 ETI_DUR = 5.0                        # puis elle s'efface : le visage reste degage ensuite
 # Volume cible des plateformes (-14 LUFS). Les interviews Thinkerview sortent vers
 # -21 : un clip plus faible que le precedent dans le fil se fait passer.
@@ -428,19 +428,19 @@ def etiquette_png(texte: str, dst: Path) -> int:
     image incrustee. Renvoie la hauteur de l'image (pour la centrer sur ETI_Y)."""
     from PIL import Image, ImageDraw, ImageFilter, ImageFont
     texte = re.sub(r"\s+", " ", texte).strip()
-    police = ImageFont.truetype(str(FONTS_DIR / "Montserrat-Black.ttf"), 60)
+    police = ImageFont.truetype(str(FONTS_DIR / "Montserrat-Black.ttf"), 80)
     mesure = ImageDraw.Draw(Image.new("L", (1, 1)))
     larg = lambda t: mesure.textlength(t, font=police)
     # une ligne si elle tient, sinon coupure au mot le plus proche du milieu
     lignes = [texte]
-    if larg(texte) > 940:
+    if larg(texte) > 900:
         mots = texte.split()
         coupe = min(range(1, len(mots)), key=lambda i: abs(larg(" ".join(mots[:i]))
                                                           - larg(" ".join(mots[i:]))))
         lignes = [" ".join(mots[:coupe]), " ".join(mots[coupe:])]
     asc, desc = police.getmetrics()
     interligne = asc + desc - 6
-    pad_x, pad_y, rayon = 38, 22, 28
+    pad_x, pad_y, rayon = 44, 26, 32
     bw = int(max(larg(l) for l in lignes)) + 2 * pad_x
     bh = interligne * len(lignes) + 2 * pad_y
     marge = 40                                  # place pour l'ombre
@@ -581,25 +581,23 @@ def produire(src: Path, choix: list[dict], n: int, suivi=None) -> list[dict]:
             suivi(i, len(retenus), c)
         base = out / f"{src.stem}_{i}_{slug(c.get('titre', 'clip'))}"
         ass = base.with_suffix(".ass")
-        sous_titres(words, s, e, ass, c.get("accroche_ecran") or "")
         print(f"[{i}] {s:.1f}-{e:.1f}s ({e - s:.0f}s) score {c.get('score')} : {c.get('titre')}")
-        rendre(src, s, e, ass, base.with_suffix(".mp4"))
-        ass.unlink(missing_ok=True)
-        # Version Instagram/Facebook : l'etiquette tout le clip, sans l'encadre du haut.
-        # Rendue ici, sur GitHub : le Pi la donne a Instagram par son lien public,
-        # sans jamais la telecharger.
-        insta = ""
+        # Une seule version pour toutes les plateformes (choix du 13/10) : l'etiquette en
+        # gros au centre les 5 premieres secondes, a la place de l'encadre du haut.
+        # Sans etiquette (ancien choix en cache), on garde l'encadre d'accroche.
         if c.get("etiquette"):
-            insta = base.name + "_insta.mp4"
             png = base.with_suffix(".etiquette.png")
             haut = etiquette_png(c["etiquette"], png)
             sous_titres(words, s, e, ass)
-            rendre(src, s, e, ass, out / insta, png, haut)
-            ass.unlink(missing_ok=True)
+            rendre(src, s, e, ass, base.with_suffix(".mp4"), png, haut)
             png.unlink(missing_ok=True)
+        else:
+            sous_titres(words, s, e, ass, c.get("accroche_ecran") or "")
+            rendre(src, s, e, ass, base.with_suffix(".mp4"))
+        ass.unlink(missing_ok=True)
         rendus.append({"fichier": base.with_suffix(".mp4").name, "titre": c.get("titre", ""),
                        "accroche": c.get("accroche_ecran", ""), "score": c.get("score"),
-                       "etiquette": c.get("etiquette", ""), "fichier_insta": insta,
+                       "etiquette": c.get("etiquette", ""),
                        "debut": round(s, 2), "fin": round(e, 2), "duree": round(e - s, 1),
                        "description": description(c, info), "publiable": publiable(info)})
     index ={**info, "genere": __import__("time").strftime("%Y-%m-%d %H:%M"), "clips": rendus}

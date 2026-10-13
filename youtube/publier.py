@@ -90,6 +90,10 @@ def fichier(idx: dict, clip: dict, brut: bool = False) -> Path:
         habille = C.OUT_HABILLE / (Path(clip["fichier"]).stem + "_explique.mp4")
         if habille.exists():
             return habille
+    # clips rendus le 12/10 en deux versions : celle a etiquette sert partout
+    insta = C.OUT / clip["fichier_insta"] if clip.get("fichier_insta") else None
+    if insta and insta.exists():
+        return insta
     return C.OUT / clip["fichier"]
 
 

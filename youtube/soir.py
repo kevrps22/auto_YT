@@ -140,6 +140,8 @@ def menage(simuler: bool = False) -> int:
             if n <= garde and f"{idx['id']}_{n}" not in jrn:
                 continue
             jeter(C.OUT / clip["fichier"])
+            if clip.get("fichier_insta"):
+                jeter(C.OUT / clip["fichier_insta"])
             jeter(C.OUT_HABILLE / (Path(clip["fichier"]).stem + "_explique.mp4"))
         if garde and all(f"{idx['id']}_{n}" in jrn for n in range(1, garde + 1)):
             src = C.SRC / f"{idx['id']}.mp4"   # source epuisee : plus rien a en tirer
