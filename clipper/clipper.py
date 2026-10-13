@@ -54,7 +54,7 @@ def charger_env() -> None:
 charger_env()
 
 W, H = 1080, 1920
-MIN_S, MAX_S = 20.0, 58.0            # un Short au-dela de 60 s n'est plus un Short
+MIN_S, MAX_S = 20.0, 45.0            # 45 s max : au-dela, la courbe de retention fond (Anticor 56 s : 20 % a la fin, Klein 47 s : 50 %)
 # Zone conservee de la source 16:9 : un carre central. A 78 % de la largeur,
 # l'image commentee restait minuscule au milieu d'un ecran sombre.
 SRC_CROP_W = 0.5625
@@ -183,10 +183,13 @@ def choisir(phr: list[dict], cuts: list[float], n: int, titre_src: str) -> list[
         "avant (« cette blague », « ce que je disais », « lui », « ca », « et donc »). "
         "Si le sujet est introduit par une question de l'intervieweur, commence a la "
         "question.\n"
-        "4. Il se termine sur une CHUTE (punchline, rire, conclusion) et contient la "
-        "reponse ou l'information promise : on a eu « il manque l'info interessante » "
-        "sur un extrait coupe avant la revelation. Mieux vaut un extrait plus long "
-        "que coupe trop tot.\n"
+        "4. Il contient la reponse ou l'information promise (on a eu « il manque l'info "
+        "interessante » sur un extrait coupe avant la revelation) et il S'ARRETE "
+        "JUSTE APRES LA CHUTE : la derniere phrase de l'extrait est la punchline, le "
+        "rire ou la conclusion, prononcee EN ENTIER. Rien apres : ni commentaire, ni "
+        "relance, ni « voila ». Les spectateurs decrochent a mesure que l'extrait "
+        "s'allonge : retire tout ce qui n'amene pas a la chute (digression, repetition, "
+        "exemple de trop).\n"
         "5. Un extrait qui ne remplit pas 3 et 4 est ELIMINE, meme s'il est fort.\n"
         f"6. Duree entre {MIN_S:.0f} et {MAX_S:.0f} secondes. Pas de chevauchement.\n"
         "7. EXCLUS : sponsors, codes promo, publicites, remerciements pour des dons, "
@@ -428,16 +431,21 @@ def etiquette_png(texte: str, dst: Path) -> int:
     image incrustee. Renvoie la hauteur de l'image (pour la centrer sur ETI_Y)."""
     from PIL import Image, ImageDraw, ImageFilter, ImageFont
     texte = re.sub(r"\s+", " ", texte).strip()
-    police = ImageFont.truetype(str(FONTS_DIR / "Montserrat-Black.ttf"), 80)
     mesure = ImageDraw.Draw(Image.new("L", (1, 1)))
-    larg = lambda t: mesure.textlength(t, font=police)
-    # une ligne si elle tient, sinon coupure au mot le plus proche du milieu
-    lignes = [texte]
-    if larg(texte) > 900:
-        mots = texte.split()
-        coupe = min(range(1, len(mots)), key=lambda i: abs(larg(" ".join(mots[:i]))
-                                                          - larg(" ".join(mots[i:]))))
-        lignes = [" ".join(mots[:coupe]), " ".join(mots[coupe:])]
+    # Une ligne si elle tient, sinon deux lignes coupees au mot le plus equilibre ;
+    # et si une ligne reste trop large (« Des deputes deconnectes » sortait de
+    # l'ecran le 13/10), on reduit la police jusqu'a ce que tout tienne.
+    for taille in range(80, 46, -4):
+        police = ImageFont.truetype(str(FONTS_DIR / "Montserrat-Black.ttf"), taille)
+        larg = lambda t, p=police: mesure.textlength(t, font=p)
+        lignes = [texte]
+        if larg(texte) > 900:
+            mots = texte.split()
+            coupe = min(range(1, len(mots)), key=lambda i: max(larg(" ".join(mots[:i])),
+                                                              larg(" ".join(mots[i:]))))
+            lignes = [" ".join(mots[:coupe]), " ".join(mots[coupe:])]
+        if max(larg(l) for l in lignes) <= 900:
+            break
     asc, desc = police.getmetrics()
     interligne = asc + desc - 6
     pad_x, pad_y, rayon = 44, 26, 32
