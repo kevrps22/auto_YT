@@ -34,6 +34,10 @@ import clipper as C          # noqa: E402
 import github_io as G        # noqa: E402
 import publier as P          # noqa: E402
 
+# La chaine par son identifiant, qui ne change jamais : le 13/10, le passage de
+# @Attends_Quoi a @S1gularite a casse toutes les recherches par nom.
+CHAINE_ID = os.environ.get("YT_CHANNEL_ID", "UCcuwgCwFjMv5Ow-FYy854mQ")
+
 CHAINE_SOURCE = "@thinkerview"
 # Duree exploitable d'un entretien : sous 20 min il n'y a pas 4 bons moments,
 # au-dela de 3 h le rendu approche la limite de 6 h des serveurs GitHub.
@@ -275,7 +279,7 @@ def deja_en_ligne(titre: str) -> bool:
         cle = os.environ["YT_API_KEY"]
         api = "https://www.googleapis.com/youtube/v3"
         ch = requests.get(f"{api}/channels", timeout=30, params={
-            "part": "contentDetails", "forHandle": os.environ.get("YT_CHANNEL", "@Attends_Quoi"),
+            "part": "contentDetails", "id": CHAINE_ID,
             "key": cle}).json()["items"][0]
         it = requests.get(f"{api}/playlistItems", timeout=30, params={
             "part": "snippet", "maxResults": 15, "key": cle,
@@ -306,7 +310,7 @@ def recoler(simuler: bool = False) -> None:
     cle = os.environ["YT_API_KEY"]
     api = "https://www.googleapis.com/youtube/v3"
     ch = requests.get(f"{api}/channels", timeout=30, params={
-        "part": "contentDetails", "forHandle": os.environ.get("YT_CHANNEL", "@Attends_Quoi"),
+        "part": "contentDetails", "id": CHAINE_ID,
         "key": cle}).json()["items"][0]
     playlist, en_ligne, page = ch["contentDetails"]["relatedPlaylists"]["uploads"], {}, None
     for _ in range(2):

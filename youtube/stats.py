@@ -37,6 +37,10 @@ import github_io as G        # noqa: E402
 import publier as P          # noqa: E402
 import soir as S             # noqa: E402
 
+# La chaine par son identifiant, qui ne change jamais : le 13/10, le passage de
+# @Attends_Quoi a @S1gularite a casse toutes les recherches par nom.
+CHAINE_ID = os.environ.get("YT_CHANNEL_ID", "UCcuwgCwFjMv5Ow-FYy854mQ")
+
 YT = "https://www.googleapis.com/youtube/v3"
 DM = "https://api.dailymotion.com"
 BRANCHE, FICHIER = "stats", "stats.json"
@@ -63,9 +67,18 @@ def _invite_desc(desc: str) -> str:
 # ------------------------------------------------------------------ plateformes
 def youtube() -> tuple[dict, list[dict]]:
     cle = os.environ["YT_API_KEY"]
-    ch = requests.get(f"{YT}/channels", timeout=30, params={
+    response = requests.get(f"{YT}/channels", timeout=30, params={
         "part": "contentDetails,statistics,snippet", "key": cle,
-        "forHandle": os.environ.get("YT_CHANNEL", "@Attends_Quoi")}).json()["items"][0]
+        "id": CHAINE_ID
+    })
+    
+    data = response.json()
+    items = data.get("items")
+    
+    if not items:
+        raise RuntimeError(f"Erreur API YouTube /channels : pas d'items trouvés. Réponse : {data}")
+        
+    ch = items[0]
     ids, page = [], None
     for _ in range(6):
         r = requests.get(f"{YT}/playlistItems", timeout=30, params={

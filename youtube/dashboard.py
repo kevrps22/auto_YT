@@ -26,6 +26,10 @@ from pathlib import Path
 
 import requests
 
+# La chaine par son identifiant, qui ne change jamais : le 13/10, le passage de
+# @Attends_Quoi a @S1gularite a casse toutes les recherches par nom.
+CHAINE_ID = os.environ.get("YT_CHANNEL_ID", "UCcuwgCwFjMv5Ow-FYy854mQ")
+
 API = "https://www.googleapis.com/youtube/v3"
 PORT = 8765
 REFRESH_SEC = 60
@@ -61,7 +65,7 @@ def resolve_channel():
     if CHANNEL.startswith("UC"):
         data = _get("channels", part="snippet,statistics,contentDetails", id=CHANNEL)
     else:
-        data = _get("channels", part="snippet,statistics,contentDetails", forHandle=CHANNEL.lstrip("@"))
+        data = _get("channels", part="snippet,statistics,contentDetails", id=CHAINE_ID)
     if not data.get("items"):
         raise SystemExit(f"Chaine introuvable : {CHANNEL}")
     return data["items"][0]
