@@ -63,6 +63,14 @@ jobs:
           path: ~/.cache/huggingface
           key: whisper-small-v1
 
+      - name: Liberer de la place sur le disque
+        # Le 14/10, la source Laporte (2 h) a rempli les ~14 Go libres du serveur :
+        # « No space left on device » en plein rendu. Les outils preinstalles dont
+        # on ne se sert pas (.NET, Android, Haskell, CodeQL) occupent ~25 Go.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL                       /usr/local/share/boost /usr/local/.ghcup || true
+          df -h /
+
       - name: Recuperer la video source
         run: |
           mkdir -p media/src
@@ -71,8 +79,11 @@ jobs:
           # envois d'un seul tenant : erreur 500 en fin de transfert)
           if ! gh release download "$TAG" -D media/src -p "$VID.mp4" 2>/dev/null; then
             gh release download "$TAG" -D media/src -p "$VID.mp4.part*"
-            cat media/src/"$VID".mp4.part* > "media/src/$VID.mp4"
-            rm -f media/src/"$VID".mp4.part*
+            # chaque tranche est supprimee des qu'elle est recollee : la video
+            # n'existe jamais en double sur le disque
+            for p in $(ls media/src/"$VID".mp4.part* | sort); do
+              cat "$p" >> "media/src/$VID.mp4" && rm -f "$p"
+            done
           fi
           # caches d'un passage precedent : evitent de tout retranscrire
           for f in "$VID.words.json" "$VID.scenes.txt" "$VID.clips.json"; do
