@@ -135,6 +135,18 @@ def _envoyer(rel: dict, nom: str, fichier: Path, debut: int, longueur: int,
     raise RuntimeError(f"Envoi impossible apres 3 essais : {nom}")
 
 
+def _empreinte(fichier: Path) -> str:
+    """Taille + debut + fin du fichier : suffit a distinguer deux telechargements."""
+    import hashlib
+    h, taille = hashlib.sha256(), fichier.stat().st_size
+    h.update(str(taille).encode())
+    with fichier.open("rb") as f:
+        h.update(f.read(1 << 20))
+        f.seek(max(0, taille - (1 << 20)))
+        h.update(f.read())
+    return h.hexdigest()[:12]
+
+
 def deposer(rel: dict, fichier: Path) -> None:
     taille = fichier.stat().st_size
     if taille <= TRANCHE_MAX:
@@ -145,7 +157,20 @@ def deposer(rel: dict, fichier: Path) -> None:
         print(f"  envoye en {time.time() - t0:.0f} s", flush=True)
         return
     n = -(-taille // TRANCHE_MAX)
-    deja = {a["name"]: a for a in _assets(rel) if a["state"] == "uploaded"}
+    # Le 17/10, une Laporte retelechargee a ete recollee avec les tranches d'un
+    # telechargement precedent, de meme taille mais d'octets differents : video
+    # corrompue, rendu en echec. Les tranches deja en ligne ne sont reprises que
+    # si elles viennent de CE fichier, reconnu a son empreinte.
+    marque = f"{fichier.name}.empreinte-{_empreinte(fichier)}"
+    tout = _assets(rel)
+    if not any(a["name"] == marque for a in tout):
+        for a in tout:
+            if a["name"].startswith(f"{fichier.name}.part") or                     a["name"].startswith(f"{fichier.name}.empreinte-"):
+                _api("DELETE", f"/releases/assets/{a['id']}")
+        _api("POST", rel["upload_url"].split("{")[0], params={"name": marque}, data=b"1",
+             headers={"Content-Type": "application/octet-stream"})
+        tout = []
+    deja = {a["name"]: a for a in tout if a["state"] == "uploaded"}
     print(f"  envoi {fichier.name} ({taille / 1e6:.0f} Mo) en {n} tranches", flush=True)
     t0 = time.time()
     for i in range(n):
