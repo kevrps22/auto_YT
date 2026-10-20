@@ -271,6 +271,24 @@ def approvisionner(simuler: bool = False) -> None:
 
 
 # ------------------------------------------------------------------ publication
+def attendre_reseau(max_min: int = 45) -> bool:
+    """Le Wi-Fi du Pi decroche par moments (signal a -74 dBm) : le 19/10, les deux
+    creneaux sont tombes pile dans un trou et le clip n'est parti nulle part. On
+    patiente jusqu'a ce que YouTube reponde, au lieu de rater le creneau."""
+    for i in range(max_min * 2):
+        try:
+            requests.get("https://www.googleapis.com/generate_204", timeout=10)
+            if i:
+                trace(f"reseau revenu apres {i / 2:.0f} min d'attente")
+            return True
+        except requests.RequestException:
+            if i == 0:
+                trace("PAS DE RESEAU : on attend qu'il revienne")
+            time.sleep(30)
+    trace(f"RESEAU ABSENT depuis {max_min} min : creneau abandonne, nouvel essai au suivant")
+    return False
+
+
 def deja_en_ligne(titre: str) -> bool:
     """Le titre est-il deja sur la chaine ? Seul garde-fou contre le cas ou le
     courant saute APRES l'envoi et AVANT l'ecriture du journal : la video serait
@@ -380,6 +398,8 @@ def publier(simuler: bool = False) -> None:
                 trace(f"HABILLAGE IMPOSSIBLE ({type(e).__name__}: {str(e)[:120]})")
                 trace("-> publication du clip brut")
 
+    if not simuler and not attendre_reseau():
+        return
     if deja_en_ligne(clip.get("titre", "")):
         trace("ce titre est DEJA en ligne : publication annulee, journal mis a jour")
         if not simuler:
@@ -387,7 +407,18 @@ def publier(simuler: bool = False) -> None:
                                  "fichier": habille.name, "note": "retrouve sur la chaine"}
             ecrire_journal(jrn)
         return
-    url = P.publier(vid, n, simuler=simuler)
+    # Une coupure en plein envoi faisait mourir le service sans un mot au journal.
+    for essai in (1, 2, 3):
+        try:
+            url = P.publier(vid, n, simuler=simuler)
+            break
+        except Exception as e:                  # noqa: BLE001
+            trace(f"ECHEC de l'envoi YouTube, essai {essai}/3 ({type(e).__name__}: {str(e)[:120]})")
+            if essai == 3 or not attendre_reseau():
+                raise
+            if deja_en_ligne(clip.get("titre", "")):    # parti malgre l'erreur : pas de doublon
+                trace("la video est pourtant en ligne : on n'envoie pas une seconde fois")
+                return
     trace("publication terminee")
     # Dailymotion en bonus, AVANT le menage qui efface le clip. Son echec ne
     # doit jamais faire croire que la soiree a rate : YouTube est deja parti.
