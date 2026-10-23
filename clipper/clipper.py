@@ -25,8 +25,11 @@ import os
 import re
 import subprocess
 import sys
+import time
 import unicodedata
 from pathlib import Path
+
+import httpx
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -209,16 +212,24 @@ def choisir(phr: list[dict], cuts: list[float], n: int, titre_src: str) -> list[
         "TRANSCRIPTION :\n" + "\n".join(lignes)
     )
     for m in GEMINI_MODELS:
-        try:
-            resp = client.models.generate_content(model=m, contents=prompt)
-            print(f"[choix] modele {m}")
-            return _json(resp.text)
-        except Exception as e:
-            if any(x in str(e) for x in ("RESOURCE_EXHAUSTED", "429", "NOT_FOUND", "404",
-                                         "UNAVAILABLE", "503", "INTERNAL", "500")):
-                print(f"[choix] {m} indispo -> suivant")
-                continue
-            raise
+        for essai in range(3):
+            try:
+                resp = client.models.generate_content(model=m, contents=prompt)
+                print(f"[choix] modele {m}")
+                return _json(resp.text)
+            except Exception as e:
+                # Coupure reseau (serveur qui raccroche sans repondre) : on retente
+                # le meme modele apres une pause, le quota n'est pas en cause.
+                if isinstance(e, (httpx.TransportError, ConnectionError)) and essai < 2:
+                    print(f"[choix] {m} coupure reseau ({type(e).__name__}) -> nouvel essai")
+                    time.sleep(30)
+                    continue
+                if isinstance(e, (httpx.TransportError, ConnectionError)) or any(
+                        x in str(e) for x in ("RESOURCE_EXHAUSTED", "429", "NOT_FOUND", "404",
+                                              "UNAVAILABLE", "503", "INTERNAL", "500")):
+                    print(f"[choix] {m} indispo -> suivant")
+                    break
+                raise
     raise RuntimeError("Tous les modeles Gemini sont epuises.")
 
 
