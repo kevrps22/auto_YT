@@ -209,7 +209,6 @@ def choisir(phr: list[dict], cuts: list[float], n: int, titre_src: str) -> list[
         '"score": 0-100}]\n\n'
         "TRANSCRIPTION :\n" + "\n".join(lignes)
     )
-    import httpx                       # livre avec google-genai, absent de l'etape transcription
     for m in GEMINI_MODELS:
         for essai in range(3):
             try:
@@ -219,11 +218,15 @@ def choisir(phr: list[dict], cuts: list[float], n: int, titre_src: str) -> list[
             except Exception as e:
                 # Coupure reseau (serveur qui raccroche sans repondre) : on retente
                 # le meme modele apres une pause, le quota n'est pas en cause.
-                if isinstance(e, (httpx.TransportError, ConnectionError)) and essai < 2:
+                # Reconnue a son nom : la bibliotheque reseau de google-genai change
+                # selon sa version, et l'importer a deja fait planter le rendu.
+                coupure = isinstance(e, (ConnectionError, TimeoutError)) or any(
+                    x in type(e).__name__ for x in ("Protocol", "Connect", "Timeout", "Transport", "Disconnect"))
+                if coupure and essai < 2:
                     print(f"[choix] {m} coupure reseau ({type(e).__name__}) -> nouvel essai")
                     time.sleep(30)
                     continue
-                if isinstance(e, (httpx.TransportError, ConnectionError)) or any(
+                if coupure or any(
                         x in str(e) for x in ("RESOURCE_EXHAUSTED", "429", "NOT_FOUND", "404",
                                               "UNAVAILABLE", "503", "INTERNAL", "500")):
                     print(f"[choix] {m} indispo -> suivant")
