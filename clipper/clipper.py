@@ -29,8 +29,6 @@ import time
 import unicodedata
 from pathlib import Path
 
-import httpx
-
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 
@@ -211,6 +209,7 @@ def choisir(phr: list[dict], cuts: list[float], n: int, titre_src: str) -> list[
         '"score": 0-100}]\n\n'
         "TRANSCRIPTION :\n" + "\n".join(lignes)
     )
+    import httpx                       # livre avec google-genai, absent de l'etape transcription
     for m in GEMINI_MODELS:
         for essai in range(3):
             try:
